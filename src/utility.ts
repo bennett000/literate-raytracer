@@ -167,3 +167,13 @@ function getUniformSetters(gl: WebGLRenderingContext, program: WebGLProgram, des
      
     return desc.reduce(createReduceUniformDescription(''), {});
 }
+
+// `try`/`catch` is notoriously hard for JS engines to optimize
+// let's hack around that
+function tryCatch(thing: Function, happy: (...args: any[]) => void, sad: (error: Error) => void) {
+    try {
+        happy(thing());
+    } catch (e) {
+        sad(e);
+    }
+}

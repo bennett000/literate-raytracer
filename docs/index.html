@@ -59,9 +59,9 @@
         <a href="https://github.com/tmcw/literate-raytracer">based on an open source project by tom macwright</a>,
         <a href="https://github.com/bennett000/literate-raytracer">extended by michael bennett</a>
     </div>
-    <canvas id="c"></canvas>
-    <center id="i">
-    </center>
+    <center><canvas id="c"></canvas></center>
+    <center id="l"></center>
+    <center id="i"></center>
     <div id="background"></div>
     
       <ul id="jump_to">
@@ -94,6 +94,11 @@
               
               <a class="source" href="index.html">
                 index.js
+              </a>
+            
+              
+              <a class="source" href="log.html">
+                log.js
               </a>
             
               
@@ -193,14 +198,34 @@ can be done in a relatively cross compatible way in the browser.  We’re using 
 <h2 id="contents">Contents</h2>
 <ol start="0">
 <li><a href="#configuration">Configuration</a></li>
-<li><a href="#html">HTML</a></li>
-<li><a href="#webgl">WebGL</a></li>
+<li><a href="#html">HTML <em>and more!</em></a></li>
 <li><a href="#state">Application State</a></li>
 <li><a href="#animation">Animation!</a></li>
 </ol>
 <p><a name="configuration"></a></p>
 <h2 id="0-configuration">0. Configuration</h2>
-<p><code>g_floorPlaneSize</code> is an arbitrary boundary to our scene and describes
+<p>configuration is an important part of our application.  before we even go there we
+will want a place to provide the user and/or developer feedback.  Let’s make a logger
+and we’ll assume all logs are user facing</p>
+
+            </div>
+            
+            <div class="content"><div class='highlight'><pre><span class="hljs-keyword">const</span> g_logger = (<span class="hljs-function"><span class="hljs-keyword">function</span> (<span class="hljs-params"></span>) </span>{
+    <span class="hljs-keyword">const</span> logEl = getHtmlLog();
+    <span class="hljs-keyword">return</span> logEl ? createHtmlLogReplacement(logEl) : createConsoleLog();
+}());
+g_logger.log(<span class="hljs-string">'hello world'</span>);</pre></div></div>
+            
+        </li>
+        
+        
+        <li id="section-2">
+            <div class="annotation">
+              
+              <div class="pilwrap ">
+                <a class="pilcrow" href="#section-2">&#182;</a>
+              </div>
+              <p><code>g_floorPlaneSize</code> is an arbitrary boundary to our scene and describes
 sizing used to bound animations and define a “floor plane” on which we
 can see shadows</p>
 
@@ -213,38 +238,34 @@ can see shadows</p>
         </li>
         
         
-        <li id="section-2">
-            <div class="annotation">
-              
-              <div class="pilwrap ">
-                <a class="pilcrow" href="#section-2">&#182;</a>
-              </div>
-              <p><a name="html"></a></p>
-<h2 id="1-html">1. HTML</h2>
-<p>We’ll <a href="html.html" title="HTML Setup code">setup the HTML</a></p>
-
-            </div>
-            
-            <div class="content"><div class='highlight'><pre><span class="hljs-keyword">const</span> g_canvas = getHtmlCanvas();</pre></div></div>
-            
-        </li>
-        
-        
         <li id="section-3">
             <div class="annotation">
               
               <div class="pilwrap ">
                 <a class="pilcrow" href="#section-3">&#182;</a>
               </div>
-              <p><a name="webgl"></a></p>
-<h2 id="2-webgl-initialization">2. WebGL Initialization</h2>
-<p>In order to upload things to the GPU and renderthem on the canvas we’ll need to work
-with an API.  We can ask our canvas for a <a href="https://developer.mozilla.org/en-US/docs/Web/API/WebGLRenderingContext" title="WebGL Rendering Context is the API we use to upload stuff to the GPU">WebGLRenderingContext</a>;
-which will be the API we use to upload stuff to the GPU.</p>
+              <p><a name="html"></a></p>
+<h2 id="1-html-and-more">1. HTML <em>and more!</em></h2>
+<p>We’ll <a href="html.html" title="HTML Setup code">setup the HTML</a>
+and while we’re at it we should note that from here we start down the road to
+working with the GPU.  Part of getting the canvas is gonig to be listening for
+“lost context”.  The GPU is a shared resource and sometimes some of the programs
+using the GPU do not function as expected and the operating system asks the GPU
+to reset itself</p>
+<p>Let’s make sure it’s easy (and fast) to repeat all the things we need to do to start
+the WebGL process</p>
+<p>before we start the setup, we’ll need a place we can all find the <code>WebGLRenderingContext</code>,
+essentially the API to the GPU. This seems like a silly thing to worry about <em>but</em> the <code>gl</code> 
+context can be <a href="https://www.khronos.org/webgl/wiki/HandlingContextLost" title="How to handle a lost rendering context">“lost” at any time</a></p>
+<p>let’s create a simple state object</p>
 
             </div>
             
-            <div class="content"><div class='highlight'><pre><span class="hljs-keyword">const</span> g_gl = g_canvas.getContext(<span class="hljs-string">'webgl'</span>);</pre></div></div>
+            <div class="content"><div class='highlight'><pre><span class="hljs-keyword">const</span> g_glState = {
+    <span class="hljs-attr">ctx</span>: <span class="hljs-literal">null</span>,
+    <span class="hljs-attr">gl</span>: <span class="hljs-literal">null</span>,
+    <span class="hljs-attr">uniforms</span>: <span class="hljs-literal">null</span>,
+};</pre></div></div>
             
         </li>
         
@@ -255,11 +276,13 @@ which will be the API we use to upload stuff to the GPU.</p>
               <div class="pilwrap ">
                 <a class="pilcrow" href="#section-4">&#182;</a>
               </div>
-              <p>The world is an imperfect place, let’s make sure we got a valid context</p>
+              <p>let’s make our GL setup code easy to repeat
+we’ll do so with a little dependency injection via  higher order function</p>
 
             </div>
             
-            <div class="content"><div class='highlight'><pre>throwIfFalsey(g_gl, <span class="hljs-string">'could not get a WebGL context'</span>);</pre></div></div>
+            <div class="content"><div class='highlight'><pre><span class="hljs-keyword">const</span> createStartWebGl = <span class="hljs-function">(<span class="hljs-params">logger</span>) =&gt;</span> <span class="hljs-function"><span class="hljs-params">()</span> =&gt;</span> {
+    logger.log(<span class="hljs-string">'Starting WebGL'</span>);</pre></div></div>
             
         </li>
         
@@ -270,15 +293,13 @@ which will be the API we use to upload stuff to the GPU.</p>
               <div class="pilwrap ">
                 <a class="pilcrow" href="#section-5">&#182;</a>
               </div>
-              <p>Okay, great, so we’ve got a an API that let’s us talk to the GPU.  Alone that’s
-not enough for us to get started.  We need to give the GPU some code to run
-we’re going to need at least one GLSL program, that code is <a href="shaders.html" title="Our shaders, the &#39;body&#39; of our program">located in shaders.ts</a></p>
+              <p>In order to upload things to the GPU and renderthem on the canvas we’ll need to work
+with an API.  We can ask our canvas for a <a href="https://developer.mozilla.org/en-US/docs/Web/API/WebGLRenderingContext" title="WebGL Rendering Context is the API we use to upload stuff to the GPU">WebGLRenderingContext</a>;
+which will be the API we use to upload stuff to the GPU.</p>
 
             </div>
             
-            <div class="content"><div class='highlight'><pre><span class="hljs-keyword">const</span> g_ctx = bindProgram(g_gl, getVertexSource(), getFragmentSource(g_configShader));
-<span class="hljs-keyword">const</span> g_uniforms = setupScene(g_gl, g_ctx, g_scene, g_configShader);
-draw(g_gl, g_ctx, g_canvas);</pre></div></div>
+            <div class="content"><div class='highlight'><pre>    g_glState.gl = g_canvas.getContext(<span class="hljs-string">'webgl'</span>);</pre></div></div>
             
         </li>
         
@@ -288,6 +309,153 @@ draw(g_gl, g_ctx, g_canvas);</pre></div></div>
               
               <div class="pilwrap ">
                 <a class="pilcrow" href="#section-6">&#182;</a>
+              </div>
+              <p>if gl is falsey we won’t handle it here, that’s what the lostContext handler is for
+however we also don’t need to waste time/resources proceeding, so let’s bail</p>
+
+            </div>
+            
+            <div class="content"><div class='highlight'><pre>    <span class="hljs-keyword">if</span> (!g_glState.gl) {</pre></div></div>
+            
+        </li>
+        
+        
+        <li id="section-7">
+            <div class="annotation">
+              
+              <div class="pilwrap ">
+                <a class="pilcrow" href="#section-7">&#182;</a>
+              </div>
+              <p>there’s one case where we’ll want to know </p>
+
+            </div>
+            
+            <div class="content"><div class='highlight'><pre>        <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+    }
+    logger.log(<span class="hljs-string">'Got context!'</span>);</pre></div></div>
+            
+        </li>
+        
+        
+        <li id="section-8">
+            <div class="annotation">
+              
+              <div class="pilwrap ">
+                <a class="pilcrow" href="#section-8">&#182;</a>
+              </div>
+              <p>Okay, great, so we’ve got a an API that let’s us talk to the GPU.  Alone that’s
+not enough for us to get started.  We need to give the GPU some code to run
+we’re going to need at least one GLSL program, that code is <a href="shaders.html" title="Our shaders, the &#39;body&#39; of our program">located in shaders.ts</a></p>
+
+            </div>
+            
+            <div class="content"><div class='highlight'><pre>    g_glState.ctx = bindProgram(g_glState.gl, getVertexSource(), getFragmentSource(g_configShader), logger);</pre></div></div>
+            
+        </li>
+        
+        
+        <li id="section-9">
+            <div class="annotation">
+              
+              <div class="pilwrap ">
+                <a class="pilcrow" href="#section-9">&#182;</a>
+              </div>
+              <p>if something failed during compilatioin we should bail</p>
+
+            </div>
+            
+            <div class="content"><div class='highlight'><pre>    <span class="hljs-keyword">if</span> (!g_glState.ctx) {
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+    }
+    logger.log(<span class="hljs-string">'Setup scene and bind uniforms'</span>);
+    g_glState.uniforms = setupScene(g_glState.gl, g_glState.ctx, g_scene, g_configShader);
+    logger.log(<span class="hljs-string">'Drawing'</span>);
+    draw(g_glState.gl, g_glState.ctx, g_canvas);</pre></div></div>
+            
+        </li>
+        
+        
+        <li id="section-10">
+            <div class="annotation">
+              
+              <div class="pilwrap ">
+                <a class="pilcrow" href="#section-10">&#182;</a>
+              </div>
+              <p>let’s make sure things worked as expected</p>
+
+            </div>
+            
+            <div class="content"><div class='highlight'><pre>    <span class="hljs-keyword">const</span> error = g_glState.gl.getError();
+    <span class="hljs-keyword">if</span> (error !== g_glState.gl.NO_ERROR &amp;&amp; error !== g_glState.gl.CONTEXT_LOST_WEBGL) {
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+    }
+    <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+};</pre></div></div>
+            
+        </li>
+        
+        
+        <li id="section-11">
+            <div class="annotation">
+              
+              <div class="pilwrap ">
+                <a class="pilcrow" href="#section-11">&#182;</a>
+              </div>
+              <p>let’s create a function we can use to either kick off or restart WebGL</p>
+
+            </div>
+            
+            <div class="content"><div class='highlight'><pre><span class="hljs-keyword">const</span> startWebGl = createStartWebGl(g_logger);</pre></div></div>
+            
+        </li>
+        
+        
+        <li id="section-12">
+            <div class="annotation">
+              
+              <div class="pilwrap ">
+                <a class="pilcrow" href="#section-12">&#182;</a>
+              </div>
+              <p>start webgl and loadup the global logger</p>
+
+            </div>
+            
+            <div class="content"><div class='highlight'><pre><span class="hljs-keyword">const</span> g_canvas = getHtmlCanvas(g_logger, startWebGl);</pre></div></div>
+            
+        </li>
+        
+        
+        <li id="section-13">
+            <div class="annotation">
+              
+              <div class="pilwrap ">
+                <a class="pilcrow" href="#section-13">&#182;</a>
+              </div>
+              <p>if we cannot start WebGL the first time, we have a serious problem</p>
+
+            </div>
+            
+            <div class="content"><div class='highlight'><pre><span class="hljs-keyword">const</span> didStart = tryCatch(startWebGl, (result) =&gt; {
+    <span class="hljs-keyword">if</span> (result) {
+        g_logger.log(<span class="hljs-string">'Started WebGl'</span>);
+    }
+    <span class="hljs-keyword">else</span> {
+        <span class="hljs-keyword">const</span> error = <span class="hljs-string">'Could not initialize WebGL on this device'</span>;
+        g_logger.error(error);
+        throwIfFalsey(<span class="hljs-literal">false</span>, error);
+    }
+}, (e) =&gt; {
+    throwIfFalsey(<span class="hljs-literal">false</span>, <span class="hljs-string">'WebGL failed to start '</span> + e.message);
+});</pre></div></div>
+            
+        </li>
+        
+        
+        <li id="section-14">
+            <div class="annotation">
+              
+              <div class="pilwrap ">
+                <a class="pilcrow" href="#section-14">&#182;</a>
               </div>
               <p><a name="state"></a></p>
 <h2 id="3-application-state">3. Application State</h2>
@@ -323,11 +491,11 @@ draw(g_gl, g_ctx, g_canvas);</pre></div></div>
         </li>
         
         
-        <li id="section-7">
+        <li id="section-15">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-7">&#182;</a>
+                <a class="pilcrow" href="#section-15">&#182;</a>
               </div>
               <p><a name="animate"></a>
 4. ## Animate!</p>
@@ -337,19 +505,80 @@ on each frame…</p>
             </div>
             
             <div class="content"><div class='highlight'><pre><span class="hljs-keyword">const</span> animate = <span class="hljs-function">(<span class="hljs-params">time</span>) =&gt;</span> {
-    <span class="hljs-keyword">const</span> { aa, isAnimating, shadingModel } = g_userControllableState;
-    <span class="hljs-keyword">if</span> (isAnimating === <span class="hljs-literal">false</span>) {
+    <span class="hljs-keyword">const</span> { aa, isAnimating, shadingModel } = g_userControllableState;</pre></div></div>
+            
+        </li>
+        
+        
+        <li id="section-16">
+            <div class="annotation">
+              
+              <div class="pilwrap ">
+                <a class="pilcrow" href="#section-16">&#182;</a>
+              </div>
+              <p>if we’re not animating bail, the consumer will need to restart</p>
+
+            </div>
+            
+            <div class="content"><div class='highlight'><pre>    <span class="hljs-keyword">if</span> (isAnimating === <span class="hljs-literal">false</span>) {
         <span class="hljs-keyword">return</span>;
-    }
-    g_fps.frames += <span class="hljs-number">1</span>;
+    }</pre></div></div>
+            
+        </li>
+        
+        
+        <li id="section-17">
+            <div class="annotation">
+              
+              <div class="pilwrap ">
+                <a class="pilcrow" href="#section-17">&#182;</a>
+              </div>
+              <p>if we somehow lost GL context skip to the next frame, this is not intentional
+and we should restart for the consumer</p>
+
+            </div>
+            
+            <div class="content"><div class='highlight'><pre>    <span class="hljs-keyword">if</span> (!g_glState.ctx || !g_glState.gl || !g_glState.uniforms) {
+        requestAnimationFrame(animate);
+        <span class="hljs-keyword">return</span>;
+    }</pre></div></div>
+            
+        </li>
+        
+        
+        <li id="section-18">
+            <div class="annotation">
+              
+              <div class="pilwrap ">
+                <a class="pilcrow" href="#section-18">&#182;</a>
+              </div>
+              <p>update our FPS state</p>
+
+            </div>
+            
+            <div class="content"><div class='highlight'><pre>    g_fps.frames += <span class="hljs-number">1</span>;
     g_fps.countTime += time - g_fps.lastTime;
     g_fps.lastTime = time;
     <span class="hljs-keyword">if</span> (g_fps.countTime &gt;= g_fps.sampleDuration) {
         <span class="hljs-built_in">console</span>.log(<span class="hljs-string">'fps'</span>, g_fps.frames / (g_fps.countTime / <span class="hljs-number">1000</span>));
         g_fps.frames = <span class="hljs-number">0</span>;
         g_fps.countTime = <span class="hljs-number">0</span>;
-    }
-    g_planetStates.forEach(<span class="hljs-function">(<span class="hljs-params">state, i</span>) =&gt;</span> {
+    }</pre></div></div>
+            
+        </li>
+        
+        
+        <li id="section-19">
+            <div class="annotation">
+              
+              <div class="pilwrap ">
+                <a class="pilcrow" href="#section-19">&#182;</a>
+              </div>
+              <p>update the state of our spheres</p>
+
+            </div>
+            
+            <div class="content"><div class='highlight'><pre>    g_planetStates.forEach(<span class="hljs-function">(<span class="hljs-params">state, i</span>) =&gt;</span> {
         <span class="hljs-keyword">if</span> (i &gt; <span class="hljs-number">0</span>) {
             <span class="hljs-keyword">if</span> (state.matrix[<span class="hljs-number">12</span>] &gt; g_floorPlaneSize) {
                 state.vector = normalize3_1([<span class="hljs-number">-1</span>, state.vector[<span class="hljs-number">1</span>], state.vector[<span class="hljs-number">2</span>]]);
@@ -378,11 +607,11 @@ on each frame…</p>
         </li>
         
         
-        <li id="section-8">
+        <li id="section-20">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-8">&#182;</a>
+                <a class="pilcrow" href="#section-20">&#182;</a>
               </div>
               <p>pin the second light to the second sphere</p>
 
@@ -392,7 +621,7 @@ on each frame…</p>
                 g_scene.lights[<span class="hljs-number">1</span>][<span class="hljs-number">0</span>] = state.matrix[<span class="hljs-number">12</span>];
                 g_scene.lights[<span class="hljs-number">1</span>][<span class="hljs-number">1</span>] = state.matrix[<span class="hljs-number">13</span>];
                 g_scene.lights[<span class="hljs-number">1</span>][<span class="hljs-number">2</span>] = state.matrix[<span class="hljs-number">14</span>];
-                g_uniforms.pointLights[<span class="hljs-number">1</span>].point(g_scene.lights[<span class="hljs-number">1</span>]);
+                g_glState.uniforms.pointLights[<span class="hljs-number">1</span>].point(g_scene.lights[<span class="hljs-number">1</span>]);
             }
         }
         <span class="hljs-keyword">const</span> sphere = g_scene.spheres[i];
@@ -400,22 +629,22 @@ on each frame…</p>
             sphere.point = [state.matrix[<span class="hljs-number">12</span>], state.matrix[<span class="hljs-number">13</span>], state.matrix[<span class="hljs-number">14</span>]];
             g_planetStates[i] = state;
         }
-        g_uniforms.spheres[i].point(sphere.point);
+        g_glState.uniforms.spheres[i].point(sphere.point);
     });
-    g_uniforms.shadingModel(shadingModel);
-    g_uniforms.aa(aa);
-    draw(g_gl, g_ctx, g_canvas);
+    g_glState.uniforms.shadingModel(shadingModel);
+    g_glState.uniforms.aa(aa);
+    draw(g_glState.gl, g_glState.ctx, g_canvas);
     requestAnimationFrame(animate);
 };</pre></div></div>
             
         </li>
         
         
-        <li id="section-9">
+        <li id="section-21">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-9">&#182;</a>
+                <a class="pilcrow" href="#section-21">&#182;</a>
               </div>
               <p>bind some controls</p>
 
@@ -426,11 +655,11 @@ on each frame…</p>
         </li>
         
         
-        <li id="section-10">
+        <li id="section-22">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-10">&#182;</a>
+                <a class="pilcrow" href="#section-22">&#182;</a>
               </div>
               <p>finally kick it all off</p>
 

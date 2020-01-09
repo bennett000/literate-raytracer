@@ -361,7 +361,9 @@ function createShader(gl, type, source) {
     // WebGL is flexible.  Before we even compile the sahder we need to allocate
     // a place to store it in the GPU, lets do that now
     const shader = gl.createShader(type);
-    throwIfFalsey(shader, 'could not create shader: ' + source);
+    if (!shader) {
+        return null;
+    }
     // with some memory in hand we can load in some source code and compile
     gl.shaderSource(shader, source);
     gl.compileShader(shader);
@@ -374,7 +376,8 @@ function createShader(gl, type, source) {
     const log = gl.getShaderInfoLog(shader);
     // and we'll clean up
     gl.deleteShader(shader);
-    throwIfFalsey(false, 'shader error: ' + log + '\n\n' + source);
+    console.error(log);
+    return null;
 }
 //
 // <a name="crateProgram"></a>
@@ -390,7 +393,9 @@ function createProgram(gl, vertexShader, fragmentShader) {
     // first let's get some memory to store the program
     const program = gl.createProgram();
     // and make sure we get that memory
-    throwIfFalsey(program, 'could not create GL program');
+    if (!program) {
+        return null;
+    }
     // then we can attach the two shaders via reference
     gl.attachShader(program, vertexShader);
     gl.attachShader(program, fragmentShader);
@@ -405,7 +410,8 @@ function createProgram(gl, vertexShader, fragmentShader) {
     const log = gl.getProgramInfoLog(program);
     // and clean up
     gl.deleteProgram(program);
-    throwIfFalsey(false, 'could not compile GL: ' + log);
+    console.error(log);
+    return null;
 }
 //
 // <a name="bindProgram"></a>
@@ -414,19 +420,38 @@ function createProgram(gl, vertexShader, fragmentShader) {
 // Our shader approach is fairly simple and we don't need much flexibility
 // `bindProgram` sets up an opinionated vertex shader and a somewhat more flexibile
 // fragment shader..
-function bindProgram(gl, vertexSource, fragmentSource) {
+function bindProgram(gl, vertexSource, fragmentSource, logger) {
     // let's compile the shaders and link the program
+    //
+    // first create the vertex shader and bail if it fails
+    logger.log('Compiling vertex shader');
     const vs = createShader(gl, gl.VERTEX_SHADER, vertexSource);
+    if (!vs) {
+        return null;
+    }
+    // then we'll create the fragment shader and bail if it fails
+    logger.log('Compiling fragment shader');
     const fs = createShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
+    if (!fs) {
+        return null;
+    }
+    // finally we'll link the shaders... and bail if they fail
+    logger.log('Linking shaders');
     const program = createProgram(gl, vs, fs);
+    if (!program) {
+        return null;
+    }
+    logger.log('Binding vertex attributes');
     // our [vertex shader](./shader.html#vertexShader "our vertex shader's source") is strongly 
     // opinionated. We need to bind our position data for a quad (two triangles) to the program
     // but first we need to get the position location
     const positionLocation = gl.getAttribLocation(program, 'a_position');
     // Next we need some memory in the GPU to upload the data to
     const positionBuffer = gl.createBuffer();
-    // we might not get memory, let's make sure
-    throwIfFalsey(positionBuffer, 'fail to get position buffer');
+    // we might not get memory, if not, we'll return null
+    if (!positionBuffer) {
+        return null;
+    }
     // okay, tell the GPU/WebGL where in memory we want to upload
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
     // then let's upload six vertices for the two triangles that will make up our
@@ -605,13 +630,28 @@ function getUniformDescription(shaderConfig) {
 // it all begins with HTML somewhere out there we want a canvas to draw on, 
 // we could create one, but for the purposes of this document it will be easier
 // for us to ask the host HTML file to provide us a canvas element named `"c"`
-function getHtmlCanvas() {
+function getHtmlCanvas(log, onLostContext) {
     const canvas = window.document.getElementById('c');
     // to keep things simple we're working in the global browser space, and we'll note
     // that with a `g_` prefix
     // let's make sure our host HTML document provided us a canvas
     // and in the spirit of readable error messages we'll use a [utility function](utility.html#throwIfFalsey "Utility Functions for Literate Ray Tracer")
     throwIfFalsey(canvas, 'requires an HTML canvas element with the id "c"');
+    // now that we have a canvas we can start to do some cool stuff
+    // and we'll also want to understand our tools, and when we need to 
+    // recalibrate them
+    //
+    // let's add make sure we know when the system resets the GPU
+    let lastTry = 0;
+    const onLost = () => {
+        log.warn('Lost WebGL Context');
+        tryCatch(onLostContext, () => lastTry = 0, (e) => {
+            console.error(e.message);
+            log.error('Failed to restart WebGL ' + e.message);
+            setTimeout(onLost, lastTry++);
+        });
+    };
+    canvas.addEventListener('webglcontextlost', onLost);
     // we'll want to [resize](#resize, "Resize documentation")
     // to make sure our canvas is using all of the space it can
     resize(canvas);
@@ -771,6 +811,10 @@ function bindInputControls(state) {
         controls.forEach((control) => control.free());
     };
 }
+// we also want a function that gets us the HTML element for output logs (if any)
+function getHtmlLog() {
+    return window.document.getElementById('l');
+}
 // Welcome to the Literate Ray Tracer, a program that reads like a book.
 // This book is a long winded fork of [Tom Macwright's](https://github.com/tmcw/literate-raytracer "tom macwright's literate ray tracer")
 // In addition to Tom's work, the following websights were leveraged extensively
@@ -829,14 +873,21 @@ function bindInputControls(state) {
 // Beyond that we'll also look at casting more rays to do things like reflections, and refractions
 // ## Contents
 // 0. [Configuration](#configuration)
-// 1. [HTML](#html)
-// 2. [WebGL](#webgl)
-// 3. [Application State](#state)
-// 4. [Animation!](#animation)
+// 1. [HTML _and more!_](#html)
+// 2. [Application State](#state)
+// 3. [Animation!](#animation)
 //
 // <a name="configuration"></a>
 // ## 0. Configuration
 //
+// configuration is an important part of our application.  before we even go there we
+// will want a place to provide the user and/or developer feedback.  Let's make a logger
+// and we'll assume all logs are user facing
+const g_logger = (function () {
+    const logEl = getHtmlLog();
+    return logEl ? createHtmlLogReplacement(logEl) : createConsoleLog();
+}());
+g_logger.log('hello world');
 // `g_floorPlaneSize` is an arbitrary boundary to our scene and describes
 // sizing used to bound animations and define a "floor plane" on which we
 // can see shadows
@@ -845,27 +896,79 @@ const g_scene = getScene();
 const g_configShader = getShaderConfiguration(g_scene);
 // 
 // <a name="html"></a>
-// ## 1. HTML
+// ## 1. HTML _and more!_
 //
 // We'll [setup the HTML](html.html "HTML Setup code")
+// and while we're at it we should note that from here we start down the road to
+// working with the GPU.  Part of getting the canvas is gonig to be listening for
+// "lost context".  The GPU is a shared resource and sometimes some of the programs
+// using the GPU do not function as expected and the operating system asks the GPU
+// to reset itself
 //
-const g_canvas = getHtmlCanvas();
+// Let's make sure it's easy (and fast) to repeat all the things we need to do to start
+// the WebGL process
 //
-// <a name="webgl"></a>
-// ## 2. WebGL Initialization
+// before we start the setup, we'll need a place we can all find the `WebGLRenderingContext`,
+// essentially the API to the GPU. This seems like a silly thing to worry about _but_ the `gl` 
+// context can be ["lost" at any time](https://www.khronos.org/webgl/wiki/HandlingContextLost "How to handle a lost rendering context")
 //
-// In order to upload things to the GPU and renderthem on the canvas we'll need to work
-// with an API.  We can ask our canvas for a [WebGLRenderingContext](https://developer.mozilla.org/en-US/docs/Web/API/WebGLRenderingContext "WebGL Rendering Context is the API we use to upload stuff to the GPU");
-// which will be the API we use to upload stuff to the GPU.
-const g_gl = g_canvas.getContext('webgl');
-// The world is an imperfect place, let's make sure we got a valid context
-throwIfFalsey(g_gl, 'could not get a WebGL context');
-// Okay, great, so we've got a an API that let's us talk to the GPU.  Alone that's
-// not enough for us to get started.  We need to give the GPU some code to run
-// we're going to need at least one GLSL program, that code is [located in shaders.ts](shaders.html "Our shaders, the 'body' of our program")
-const g_ctx = bindProgram(g_gl, getVertexSource(), getFragmentSource(g_configShader));
-const g_uniforms = setupScene(g_gl, g_ctx, g_scene, g_configShader);
-draw(g_gl, g_ctx, g_canvas);
+// let's create a simple state object
+const g_glState = {
+    ctx: null,
+    gl: null,
+    uniforms: null,
+};
+// let's make our GL setup code easy to repeat
+// we'll do so with a little dependency injection via  higher order function
+const createStartWebGl = (logger) => () => {
+    logger.log('Starting WebGL');
+    // In order to upload things to the GPU and renderthem on the canvas we'll need to work
+    // with an API.  We can ask our canvas for a [WebGLRenderingContext](https://developer.mozilla.org/en-US/docs/Web/API/WebGLRenderingContext "WebGL Rendering Context is the API we use to upload stuff to the GPU");
+    // which will be the API we use to upload stuff to the GPU.
+    g_glState.gl = g_canvas.getContext('webgl');
+    // if gl is falsey we won't handle it here, that's what the lostContext handler is for
+    // however we also don't need to waste time/resources proceeding, so let's bail
+    if (!g_glState.gl) {
+        // there's one case where we'll want to know 
+        return false;
+    }
+    logger.log('Got context!');
+    // Okay, great, so we've got a an API that let's us talk to the GPU.  Alone that's
+    // not enough for us to get started.  We need to give the GPU some code to run
+    // we're going to need at least one GLSL program, that code is [located in shaders.ts](shaders.html "Our shaders, the 'body' of our program")
+    g_glState.ctx = bindProgram(g_glState.gl, getVertexSource(), getFragmentSource(g_configShader), logger);
+    // if something failed during compilatioin we should bail
+    if (!g_glState.ctx) {
+        return false;
+    }
+    logger.log('Setup scene and bind uniforms');
+    g_glState.uniforms = setupScene(g_glState.gl, g_glState.ctx, g_scene, g_configShader);
+    logger.log('Drawing');
+    draw(g_glState.gl, g_glState.ctx, g_canvas);
+    // let's make sure things worked as expected
+    const error = g_glState.gl.getError();
+    if (error !== g_glState.gl.NO_ERROR && error !== g_glState.gl.CONTEXT_LOST_WEBGL) {
+        return false;
+    }
+    return true;
+};
+// let's create a function we can use to either kick off or restart WebGL
+const startWebGl = createStartWebGl(g_logger);
+// start webgl and loadup the global logger
+const g_canvas = getHtmlCanvas(g_logger, startWebGl);
+// if we cannot start WebGL the first time, we have a serious problem
+const didStart = tryCatch(startWebGl, (result) => {
+    if (result) {
+        g_logger.log('Started WebGl');
+    }
+    else {
+        const error = 'Could not initialize WebGL on this device';
+        g_logger.error(error);
+        throwIfFalsey(false, error);
+    }
+}, (e) => {
+    throwIfFalsey(false, 'WebGL failed to start ' + e.message);
+});
 //
 // <a name="state"></a>
 // ## 3. Application State
@@ -903,9 +1006,17 @@ const g_userControllableState = {
 // on each frame...
 const animate = (time) => {
     const { aa, isAnimating, shadingModel } = g_userControllableState;
+    // if we're not animating bail, the consumer will need to restart
     if (isAnimating === false) {
         return;
     }
+    // if we somehow lost GL context skip to the next frame, this is not intentional
+    // and we should restart for the consumer
+    if (!g_glState.ctx || !g_glState.gl || !g_glState.uniforms) {
+        requestAnimationFrame(animate);
+        return;
+    }
+    // update our FPS state
     g_fps.frames += 1;
     g_fps.countTime += time - g_fps.lastTime;
     g_fps.lastTime = time;
@@ -914,6 +1025,7 @@ const animate = (time) => {
         g_fps.frames = 0;
         g_fps.countTime = 0;
     }
+    // update the state of our spheres
     g_planetStates.forEach((state, i) => {
         if (i > 0) {
             if (state.matrix[12] > g_floorPlaneSize) {
@@ -944,7 +1056,7 @@ const animate = (time) => {
                 g_scene.lights[1][0] = state.matrix[12];
                 g_scene.lights[1][1] = state.matrix[13];
                 g_scene.lights[1][2] = state.matrix[14];
-                g_uniforms.pointLights[1].point(g_scene.lights[1]);
+                g_glState.uniforms.pointLights[1].point(g_scene.lights[1]);
             }
         }
         const sphere = g_scene.spheres[i];
@@ -952,17 +1064,68 @@ const animate = (time) => {
             sphere.point = [state.matrix[12], state.matrix[13], state.matrix[14]];
             g_planetStates[i] = state;
         }
-        g_uniforms.spheres[i].point(sphere.point);
+        g_glState.uniforms.spheres[i].point(sphere.point);
     });
-    g_uniforms.shadingModel(shadingModel);
-    g_uniforms.aa(aa);
-    draw(g_gl, g_ctx, g_canvas);
+    g_glState.uniforms.shadingModel(shadingModel);
+    g_glState.uniforms.aa(aa);
+    draw(g_glState.gl, g_glState.ctx, g_canvas);
     requestAnimationFrame(animate);
 };
 // bind some controls
 bindInputControls(g_userControllableState);
 // finally kick it all off
 animate(0);
+// one simple log class is a wrapper around a native `console`
+function createConsoleLog() {
+    return {
+        error: console.error.bind(console),
+        log: console.log.bind(console),
+        warn: console.warn.bind(console),
+    };
+}
+// a log class that outputs whatever the last thing was to an HTML element
+function createHtmlLogReplacement(root) {
+    const span = (thing) => {
+        const s = createElement('span');
+        s.innerHTML = thing;
+        return s;
+    };
+    const log = (...stuff) => {
+        const strings = stuff.map((thing) => {
+            if (typeof thing === 'string') {
+                return span(thing);
+            }
+            if (typeof thing === 'number') {
+                return span(thing + '');
+            }
+            if (typeof thing === 'function') {
+                return span('function');
+            }
+            if (!thing) {
+                return span(`false like: (${thing})`);
+            }
+            const c = createElement('code');
+            c.innerHTML = JSON.stringify(stuff, null, 4).replace('\n', '<br />');
+            return c;
+        });
+        return strings;
+    };
+    const stuffToHtml = (el) => root.appendChild(el);
+    return {
+        error(...stuff) {
+            root.innerHTML = '';
+            log('❗', ...stuff).forEach(stuffToHtml);
+        },
+        log(...stuff) {
+            root.innerHTML = '';
+            return log('👍', ...stuff).forEach(stuffToHtml);
+        },
+        warn(...stuff) {
+            root.innerHTML = '';
+            return log('⚠', ...stuff).forEach(stuffToHtml);
+        },
+    };
+}
 function createMatrix3_1() {
     return [0, 0, 0];
 }
@@ -2714,5 +2877,15 @@ function getUniformSetters(gl, program, desc) {
         return dictionary;
     };
     return desc.reduce(createReduceUniformDescription(''), {});
+}
+// `try`/`catch` is notoriously hard for JS engines to optimize
+// let's hack around that
+function tryCatch(thing, happy, sad) {
+    try {
+        happy(thing());
+    }
+    catch (e) {
+        sad(e);
+    }
 }
 //# sourceMappingURL=index.js.map

@@ -57,16 +57,26 @@
 
 // ## Contents
 // 0. [Configuration](#configuration)
-// 1. [HTML](#html)
-// 2. [WebGL](#webgl)
-// 3. [Application State](#state)
-// 4. [Animation!](#animation)
+// 1. [HTML _and more!_](#html)
+// 2. [Application State](#state)
+// 3. [Animation!](#animation)
 
 
 //
 // <a name="configuration"></a>
 // ## 0. Configuration
 //
+
+// configuration is an important part of our application.  before we even go there we
+// will want a place to provide the user and/or developer feedback.  Let's make a logger
+// and we'll assume all logs are user facing
+const g_logger = (function() {
+    const logEl = getHtmlLog();
+
+    return logEl ? createHtmlLogReplacement(logEl) : createConsoleLog();
+}());
+
+g_logger.log('hello world');
 
 // `g_floorPlaneSize` is an arbitrary boundary to our scene and describes
 // sizing used to bound animations and define a "floor plane" on which we
@@ -89,31 +99,91 @@ const g_configShader = getShaderConfiguration(g_scene);
 
 // 
 // <a name="html"></a>
-// ## 1. HTML
+// ## 1. HTML _and more!_
 //
 // We'll [setup the HTML](html.html "HTML Setup code")
+// and while we're at it we should note that from here we start down the road to
+// working with the GPU.  Part of getting the canvas is gonig to be listening for
+// "lost context".  The GPU is a shared resource and sometimes some of the programs
+// using the GPU do not function as expected and the operating system asks the GPU
+// to reset itself
 //
-const g_canvas = getHtmlCanvas();
-
-
+// Let's make sure it's easy (and fast) to repeat all the things we need to do to start
+// the WebGL process
 //
-// <a name="webgl"></a>
-// ## 2. WebGL Initialization
+// before we start the setup, we'll need a place we can all find the `WebGLRenderingContext`,
+// essentially the API to the GPU. This seems like a silly thing to worry about _but_ the `gl` 
+// context can be ["lost" at any time](https://www.khronos.org/webgl/wiki/HandlingContextLost "How to handle a lost rendering context")
 //
-// In order to upload things to the GPU and renderthem on the canvas we'll need to work
-// with an API.  We can ask our canvas for a [WebGLRenderingContext](https://developer.mozilla.org/en-US/docs/Web/API/WebGLRenderingContext "WebGL Rendering Context is the API we use to upload stuff to the GPU");
-// which will be the API we use to upload stuff to the GPU.
-const g_gl = g_canvas.getContext('webgl');
+// let's create a simple state object
+const g_glState: { ctx: null | ProgramContext, gl: null | WebGLRenderingContext, uniforms: any } = {
+    ctx: null,
+    gl: null,
+    uniforms: null,
+};
 
-// The world is an imperfect place, let's make sure we got a valid context
-throwIfFalsey(g_gl, 'could not get a WebGL context');
-// Okay, great, so we've got a an API that let's us talk to the GPU.  Alone that's
-// not enough for us to get started.  We need to give the GPU some code to run
-// we're going to need at least one GLSL program, that code is [located in shaders.ts](shaders.html "Our shaders, the 'body' of our program")
+// let's make our GL setup code easy to repeat
+// we'll do so with a little dependency injection via  higher order function
+const createStartWebGl = (logger: Log) => () => {
+    logger.log('Starting WebGL');
+    // In order to upload things to the GPU and renderthem on the canvas we'll need to work
+    // with an API.  We can ask our canvas for a [WebGLRenderingContext](https://developer.mozilla.org/en-US/docs/Web/API/WebGLRenderingContext "WebGL Rendering Context is the API we use to upload stuff to the GPU");
+    // which will be the API we use to upload stuff to the GPU.
+    g_glState.gl = g_canvas.getContext('webgl');
+    // if gl is falsey we won't handle it here, that's what the lostContext handler is for
+    // however we also don't need to waste time/resources proceeding, so let's bail
+    if (!g_glState.gl) {
+        // there's one case where we'll want to know 
+        return false;
+    }
+    logger.log('Got context!');
+    // Okay, great, so we've got a an API that let's us talk to the GPU.  Alone that's
+    // not enough for us to get started.  We need to give the GPU some code to run
+    // we're going to need at least one GLSL program, that code is [located in shaders.ts](shaders.html "Our shaders, the 'body' of our program")
+    g_glState.ctx = bindProgram(g_glState.gl, getVertexSource(), getFragmentSource(g_configShader), logger);
+    // if something failed during compilatioin we should bail
+    if (!g_glState.ctx) {
+        return false;
+    }
 
-const g_ctx = bindProgram(g_gl, getVertexSource(), getFragmentSource(g_configShader));
-const g_uniforms = setupScene(g_gl, g_ctx, g_scene, g_configShader);
-draw(g_gl, g_ctx, g_canvas);
+    logger.log('Setup scene and bind uniforms');
+    g_glState.uniforms = setupScene(g_glState.gl, g_glState.ctx, g_scene, g_configShader);
+
+    logger.log('Drawing');
+    draw(g_glState.gl, g_glState.ctx, g_canvas);
+
+    // let's make sure things worked as expected
+    const error = g_glState.gl.getError();
+    if (error !== g_glState.gl.NO_ERROR && error !== g_glState.gl.CONTEXT_LOST_WEBGL) {
+        return false;
+    }
+
+    return true;
+};
+
+// let's create a function we can use to either kick off or restart WebGL
+const startWebGl = createStartWebGl(g_logger);
+
+
+// start webgl and loadup the global logger
+const g_canvas = getHtmlCanvas(g_logger, startWebGl);
+
+// if we cannot start WebGL the first time, we have a serious problem
+const didStart = tryCatch(startWebGl, (result: boolean) => {
+    if (result) {
+        g_logger.log('Started WebGl');
+    } else {
+        const error = 'Could not initialize WebGL on this device';
+        g_logger.error(error);
+        throwIfFalsey(false, error);
+    }
+}, (e) => {
+    throwIfFalsey(false, 'WebGL failed to start ' + e.message);
+});
+
+
+
+
 
 //
 // <a name="state"></a>
@@ -161,9 +231,18 @@ const g_userControllableState = {
 // on each frame...
 const animate = (time: number) => {
     const { aa, isAnimating, shadingModel } = g_userControllableState;
+    // if we're not animating bail, the consumer will need to restart
     if (isAnimating === false) {
         return;
     }
+    // if we somehow lost GL context skip to the next frame, this is not intentional
+    // and we should restart for the consumer
+    if (!g_glState.ctx || !g_glState.gl || !g_glState.uniforms) {
+        requestAnimationFrame(animate);
+        return;
+    }
+
+    // update our FPS state
     g_fps.frames += 1;
     g_fps.countTime += time - g_fps.lastTime;
     g_fps.lastTime = time;
@@ -172,6 +251,7 @@ const animate = (time: number) => {
         g_fps.frames = 0;
         g_fps.countTime = 0;
     }
+    // update the state of our spheres
     g_planetStates.forEach((state, i) => {
         if (i > 0) {
             if (state.matrix[12] > g_floorPlaneSize) {
@@ -211,7 +291,7 @@ const animate = (time: number) => {
                 g_scene.lights[1][0] = state.matrix[12];
                 g_scene.lights[1][1] = state.matrix[13];
                 g_scene.lights[1][2] = state.matrix[14];
-                g_uniforms.pointLights[1].point(g_scene.lights[1]);
+                g_glState.uniforms.pointLights[1].point(g_scene.lights[1]);
             }
         }
 
@@ -221,13 +301,13 @@ const animate = (time: number) => {
             g_planetStates[i] = state;
         }
 
-        g_uniforms.spheres[i].point(sphere.point);
+        g_glState.uniforms.spheres[i].point(sphere.point);
     });
 
-    g_uniforms.shadingModel(shadingModel);
-    g_uniforms.aa(aa);
+    g_glState.uniforms.shadingModel(shadingModel);
+    g_glState.uniforms.aa(aa);
 
-    draw(g_gl, g_ctx, g_canvas);
+    draw(g_glState.gl, g_glState.ctx, g_canvas);
     requestAnimationFrame(animate);
 };
 
@@ -237,4 +317,3 @@ bindInputControls(g_userControllableState);
 
 // finally kick it all off
 animate(0);
-
