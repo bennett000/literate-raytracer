@@ -18,7 +18,9 @@ function createShader(gl: WebGLRenderingContext, type: number, source: string) {
   // WebGL is flexible.  Before we even compile the sahder we need to allocate
   // a place to store it in the GPU, lets do that now
   const shader = gl.createShader(type);
-  throwIfFalsey(shader, 'could not create shader: ' + source);
+  if (!shader) {
+    return null;
+  }
 
   // with some memory in hand we can load in some source code and compile
   gl.shaderSource(shader, source);
@@ -34,7 +36,9 @@ function createShader(gl: WebGLRenderingContext, type: number, source: string) {
   const log = gl.getShaderInfoLog(shader);
   // and we'll clean up
   gl.deleteShader(shader);
-  throwIfFalsey(false, 'shader error: ' + log + '\n\n' + source);
+
+  console.error(log);
+  return null;
 }
 
 //
@@ -55,7 +59,9 @@ function createProgram(
   // first let's get some memory to store the program
   const program = gl.createProgram();
   // and make sure we get that memory
-  throwIfFalsey(program, 'could not create GL program');
+  if (!program) {
+    return null;
+  }
 
   // then we can attach the two shaders via reference
   gl.attachShader(program, vertexShader);
@@ -75,7 +81,8 @@ function createProgram(
 
   // and clean up
   gl.deleteProgram(program);
-  throwIfFalsey(false, 'could not compile GL: ' + log);
+  console.error(log);
+  return null;
 }
 
 
@@ -86,12 +93,30 @@ function createProgram(
 // Our shader approach is fairly simple and we don't need much flexibility
 // `bindProgram` sets up an opinionated vertex shader and a somewhat more flexibile
 // fragment shader..
-function bindProgram(gl: WebGLRenderingContext, vertexSource: string, fragmentSource: string): ProgramContext {
+function bindProgram(gl: WebGLRenderingContext, vertexSource: string, fragmentSource: string, logger: Log): null | ProgramContext {
 
   // let's compile the shaders and link the program
+  //
+  // first create the vertex shader and bail if it fails
+  logger.log('Compiling vertex shader');
   const vs = createShader(gl, gl.VERTEX_SHADER, vertexSource);
+  if (!vs) {
+    return null;
+  }
+  // then we'll create the fragment shader and bail if it fails
+  logger.log('Compiling fragment shader');
   const fs = createShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
+  if (!fs) {
+    return null;
+  }
+
+  // finally we'll link the shaders... and bail if they fail
+  logger.log('Linking shaders');
   const program = createProgram(gl, vs, fs);
+  if (!program) {
+    return null;
+  }
+  logger.log('Binding vertex attributes');
 
   // our [vertex shader](./shader.html#vertexShader "our vertex shader's source") is strongly 
   // opinionated. We need to bind our position data for a quad (two triangles) to the program
@@ -100,8 +125,10 @@ function bindProgram(gl: WebGLRenderingContext, vertexSource: string, fragmentSo
 
   // Next we need some memory in the GPU to upload the data to
   const positionBuffer = gl.createBuffer();
-  // we might not get memory, let's make sure
-  throwIfFalsey(positionBuffer, 'fail to get position buffer');
+  // we might not get memory, if not, we'll return null
+  if (!positionBuffer) {
+    return null;
+  }
 
   // okay, tell the GPU/WebGL where in memory we want to upload
   gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);

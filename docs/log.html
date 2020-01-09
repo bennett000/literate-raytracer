@@ -2,7 +2,7 @@
 
 <html>
 <head>
-  <title>shader-configuration.js</title>
+  <title>log.js</title>
   <meta http-equiv="content-type" content="text/html; charset=UTF-8">
   <link rel="stylesheet" media="all" href="custom.css" />
   <link rel="shortcut icon" href="https://literate-raytracer.michaeljbennett.info/favicon.ico">
@@ -134,7 +134,7 @@
         
           <li id="title">
               <div class="annotation">
-                  <h1>shader-configuration.js</h1>
+                  <h1>log.js</h1>
               </div>
           </li>
         
@@ -146,11 +146,17 @@
               <div class="pilwrap ">
                 <a class="pilcrow" href="#section-1">&#182;</a>
               </div>
-              <h2 id="shader-configuration">Shader Configuration</h2>
+              <p>one simple log class is a wrapper around a native <code>console</code></p>
 
             </div>
             
-            <div class="content"><div class='highlight'><pre><span class="hljs-function"><span class="hljs-keyword">function</span> <span class="hljs-title">getShaderConfiguration</span>(<span class="hljs-params">scene</span>) </span>{</pre></div></div>
+            <div class="content"><div class='highlight'><pre><span class="hljs-function"><span class="hljs-keyword">function</span> <span class="hljs-title">createConsoleLog</span>(<span class="hljs-params"></span>) </span>{
+    <span class="hljs-keyword">return</span> {
+        <span class="hljs-attr">error</span>: <span class="hljs-built_in">console</span>.error.bind(<span class="hljs-built_in">console</span>),
+        <span class="hljs-attr">log</span>: <span class="hljs-built_in">console</span>.log.bind(<span class="hljs-built_in">console</span>),
+        <span class="hljs-attr">warn</span>: <span class="hljs-built_in">console</span>.warn.bind(<span class="hljs-built_in">console</span>),
+    };
+}</pre></div></div>
             
         </li>
         
@@ -161,144 +167,50 @@
               <div class="pilwrap ">
                 <a class="pilcrow" href="#section-2">&#182;</a>
               </div>
-              <p>We’ll put all of our configuration into an object
-because much of our configuration is directly injected into GLSL code
-and because WebGL’s GLSL is ancient we’re encoding our numbers as strings.
-We’re doing this to stop WebGL from complaining that <code>1</code> is not a float
-this version of GLSL will want a full <code>1.0</code></p>
+              <p>a log class that outputs whatever the last thing was to an HTML element</p>
 
             </div>
             
-            <div class="content"><div class='highlight'><pre>    <span class="hljs-keyword">return</span> {</pre></div></div>
-            
-        </li>
-        
-        
-        <li id="section-3">
-            <div class="annotation">
-              
-              <div class="pilwrap ">
-                <a class="pilcrow" href="#section-3">&#182;</a>
-              </div>
-              <p>The colour of the background (if rays hit nothing this is the colour of the pixel) </p>
-
-            </div>
-            
-            <div class="content"><div class='highlight'><pre>        bg: {
-            <span class="hljs-attr">r</span>: <span class="hljs-string">'0.05'</span>,
-            <span class="hljs-attr">g</span>: <span class="hljs-string">'0.05'</span>,
-            <span class="hljs-attr">b</span>: <span class="hljs-string">'0.05'</span>,
-        },</pre></div></div>
-            
-        </li>
-        
-        
-        <li id="section-4">
-            <div class="annotation">
-              
-              <div class="pilwrap ">
-                <a class="pilcrow" href="#section-4">&#182;</a>
-              </div>
-              <p>F0 is a setting in our PBR (physics based rendering) system that
-deals with reflections in Fresnel equations</p>
-
-            </div>
-            
-            <div class="content"><div class='highlight'><pre>        defaultF0: <span class="hljs-string">'0.04'</span>,</pre></div></div>
-            
-        </li>
-        
-        
-        <li id="section-5">
-            <div class="annotation">
-              
-              <div class="pilwrap ">
-                <a class="pilcrow" href="#section-5">&#182;</a>
-              </div>
-              <p>Our shaders work with floating points.  Floating points have tiny decimals at
-the ends which can make comparisions tricky.  <code>epsilon</code> gives us a small value
-we can use to help work around some of the even smaller decimals.</p>
-
-            </div>
-            
-            <div class="content"><div class='highlight'><pre>        epsilon: <span class="hljs-string">'0.00005'</span>,</pre></div></div>
-            
-        </li>
-        
-        
-        <li id="section-6">
-            <div class="annotation">
-              
-              <div class="pilwrap ">
-                <a class="pilcrow" href="#section-6">&#182;</a>
-              </div>
-              <p>how many lights are in the scene?</p>
-
-            </div>
-            
-            <div class="content"><div class='highlight'><pre>        lightCount: scene.lights.length,</pre></div></div>
-            
-        </li>
-        
-        
-        <li id="section-7">
-            <div class="annotation">
-              
-              <div class="pilwrap ">
-                <a class="pilcrow" href="#section-7">&#182;</a>
-              </div>
-              <p>how many materials are in the scene?</p>
-
-            </div>
-            
-            <div class="content"><div class='highlight'><pre>        materialCount: scene.materials.length,</pre></div></div>
-            
-        </li>
-        
-        
-        <li id="section-8">
-            <div class="annotation">
-              
-              <div class="pilwrap ">
-                <a class="pilcrow" href="#section-8">&#182;</a>
-              </div>
-              <p>phongSpecular is a variable in our Blinn Phong (old school) system
-that helps us control specular (shiny) lighting
-it’s a string</p>
-
-            </div>
-            
-            <div class="content"><div class='highlight'><pre>        phongSpecularExp: <span class="hljs-string">'32.0'</span>,</pre></div></div>
-            
-        </li>
-        
-        
-        <li id="section-9">
-            <div class="annotation">
-              
-              <div class="pilwrap ">
-                <a class="pilcrow" href="#section-9">&#182;</a>
-              </div>
-              <p>how many spheres are in the scene?</p>
-
-            </div>
-            
-            <div class="content"><div class='highlight'><pre>        sphereCount: scene.spheres.length,</pre></div></div>
-            
-        </li>
-        
-        
-        <li id="section-10">
-            <div class="annotation">
-              
-              <div class="pilwrap ">
-                <a class="pilcrow" href="#section-10">&#182;</a>
-              </div>
-              <p>how many triangles are in the scene?</p>
-
-            </div>
-            
-            <div class="content"><div class='highlight'><pre>        triangleCount: scene.triangles.length,
+            <div class="content"><div class='highlight'><pre><span class="hljs-function"><span class="hljs-keyword">function</span> <span class="hljs-title">createHtmlLogReplacement</span>(<span class="hljs-params">root</span>) </span>{
+    <span class="hljs-keyword">const</span> span = <span class="hljs-function">(<span class="hljs-params">thing</span>) =&gt;</span> {
+        <span class="hljs-keyword">const</span> s = createElement(<span class="hljs-string">'span'</span>);
+        s.innerHTML = thing;
+        <span class="hljs-keyword">return</span> s;
+    };
+    <span class="hljs-keyword">const</span> log = <span class="hljs-function">(<span class="hljs-params">...stuff</span>) =&gt;</span> {
+        <span class="hljs-keyword">const</span> strings = stuff.map(<span class="hljs-function">(<span class="hljs-params">thing</span>) =&gt;</span> {
+            <span class="hljs-keyword">if</span> (<span class="hljs-keyword">typeof</span> thing === <span class="hljs-string">'string'</span>) {
+                <span class="hljs-keyword">return</span> span(thing);
+            }
+            <span class="hljs-keyword">if</span> (<span class="hljs-keyword">typeof</span> thing === <span class="hljs-string">'number'</span>) {
+                <span class="hljs-keyword">return</span> span(thing + <span class="hljs-string">''</span>);
+            }
+            <span class="hljs-keyword">if</span> (<span class="hljs-keyword">typeof</span> thing === <span class="hljs-string">'function'</span>) {
+                <span class="hljs-keyword">return</span> span(<span class="hljs-string">'function'</span>);
+            }
+            <span class="hljs-keyword">if</span> (!thing) {
+                <span class="hljs-keyword">return</span> span(<span class="hljs-string">`false like: (<span class="hljs-subst">${thing}</span>)`</span>);
+            }
+            <span class="hljs-keyword">const</span> c = createElement(<span class="hljs-string">'code'</span>);
+            c.innerHTML = <span class="hljs-built_in">JSON</span>.stringify(stuff, <span class="hljs-literal">null</span>, <span class="hljs-number">4</span>).replace(<span class="hljs-string">'\n'</span>, <span class="hljs-string">'&lt;br /&gt;'</span>);
+            <span class="hljs-keyword">return</span> c;
+        });
+        <span class="hljs-keyword">return</span> strings;
+    };
+    <span class="hljs-keyword">const</span> stuffToHtml = <span class="hljs-function">(<span class="hljs-params">el</span>) =&gt;</span> root.appendChild(el);
+    <span class="hljs-keyword">return</span> {
+        error(...stuff) {
+            root.innerHTML = <span class="hljs-string">''</span>;
+            log(<span class="hljs-string">'❗'</span>, ...stuff).forEach(stuffToHtml);
+        },
+        log(...stuff) {
+            root.innerHTML = <span class="hljs-string">''</span>;
+            <span class="hljs-keyword">return</span> log(<span class="hljs-string">'👍'</span>, ...stuff).forEach(stuffToHtml);
+        },
+        warn(...stuff) {
+            root.innerHTML = <span class="hljs-string">''</span>;
+            <span class="hljs-keyword">return</span> log(<span class="hljs-string">'⚠'</span>, ...stuff).forEach(stuffToHtml);
+        },
     };
 }</pre></div></div>
             

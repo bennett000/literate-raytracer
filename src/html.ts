@@ -2,7 +2,7 @@
 // it all begins with HTML somewhere out there we want a canvas to draw on, 
 // we could create one, but for the purposes of this document it will be easier
 // for us to ask the host HTML file to provide us a canvas element named `"c"`
-function getHtmlCanvas() {
+function getHtmlCanvas(log: Log, onLostContext: () => void) {
   const canvas = window.document.getElementById('c') as HTMLCanvasElement;
   // to keep things simple we're working in the global browser space, and we'll note
   // that with a `g_` prefix
@@ -10,6 +10,22 @@ function getHtmlCanvas() {
   // let's make sure our host HTML document provided us a canvas
   // and in the spirit of readable error messages we'll use a [utility function](utility.html#throwIfFalsey "Utility Functions for Literate Ray Tracer")
   throwIfFalsey(canvas, 'requires an HTML canvas element with the id "c"');
+
+  // now that we have a canvas we can start to do some cool stuff
+  // and we'll also want to understand our tools, and when we need to 
+  // recalibrate them
+  //
+  // let's add make sure we know when the system resets the GPU
+  let lastTry = 0;
+  const onLost = () => {
+    log.warn('Lost WebGL Context');
+    tryCatch(onLostContext, () => lastTry = 0, (e: Error) => {
+      console.error(e.message);
+      log.error('Failed to restart WebGL ' + e.message);
+      setTimeout(onLost, lastTry++);
+    });
+  };
+  canvas.addEventListener('webglcontextlost', onLost);
 
   // we'll want to [resize](#resize, "Resize documentation")
   // to make sure our canvas is using all of the space it can
@@ -195,4 +211,9 @@ function bindInputControls(
   return () => {
     controls.forEach((control) => control.free());
   };
+}
+
+// we also want a function that gets us the HTML element for output logs (if any)
+function getHtmlLog() {
+  return window.document.getElementById('l');
 }

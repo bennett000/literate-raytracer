@@ -59,9 +59,9 @@
         <a href="https://github.com/tmcw/literate-raytracer">based on an open source project by tom macwright</a>,
         <a href="https://github.com/bennett000/literate-raytracer">extended by michael bennett</a>
     </div>
-    <canvas id="c"></canvas>
-    <center id="i">
-    </center>
+    <center><canvas id="c"></canvas></center>
+    <center id="l"></center>
+    <center id="i"></center>
     <div id="background"></div>
     
       <ul id="jump_to">
@@ -94,6 +94,11 @@
               
               <a class="source" href="index.html">
                 index.js
+              </a>
+            
+              
+              <a class="source" href="log.html">
+                log.js
               </a>
             
               
@@ -317,6 +322,29 @@
         <span class="hljs-keyword">return</span> dictionary;
     };
     <span class="hljs-keyword">return</span> desc.reduce(createReduceUniformDescription(<span class="hljs-string">''</span>), {});
+}</pre></div></div>
+            
+        </li>
+        
+        
+        <li id="section-6">
+            <div class="annotation">
+              
+              <div class="pilwrap ">
+                <a class="pilcrow" href="#section-6">&#182;</a>
+              </div>
+              <p><code>try</code>/<code>catch</code> is notoriously hard for JS engines to optimize
+let’s hack around that</p>
+
+            </div>
+            
+            <div class="content"><div class='highlight'><pre><span class="hljs-function"><span class="hljs-keyword">function</span> <span class="hljs-title">tryCatch</span>(<span class="hljs-params">thing, happy, sad</span>) </span>{
+    <span class="hljs-keyword">try</span> {
+        happy(thing());
+    }
+    <span class="hljs-keyword">catch</span> (e) {
+        sad(e);
+    }
 }</pre></div></div>
             
         </li>
