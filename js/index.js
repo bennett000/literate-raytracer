@@ -2727,39 +2727,7 @@ function getFragmentSource(config) {
     }
 ` +
         // hack around GLSL's inability to index arrays
-        `
-    Material getMaterial(int index) {
-        if (index == 0) {
-            return materials[0];
-        }
-
-        if (index == 1) {
-            return materials[1];
-        }
-
-        if (index == 2) {
-            return materials[2];
-        }
-
-        if (index == 3) {
-            return materials[3];
-        }
-
-        if (index == 4) {
-            return materials[4];
-        }
-
-        if (index == 5) {
-            return materials[5];
-        }
-
-        if (index == 6) {
-            return materials[6];
-        }
-
-        return materials[0];
-    }
-` +
+        glslAccessor('Material', 'materials', 'getMaterial', materialCount, 0) +
         // PBR Computations
         // essentially straight from [Learn OpenGL](https://learnopengl.com/PBR/Theory "Learn OpenGL`")
         `
@@ -2803,7 +2771,8 @@ function getFragmentSource(config) {
 `;
 }
 // ## Utility Functions
-// Utility functions can help us make our code more readable
+// In order to make things more readable and avoid excessive duplication we want to have
+// some functions that contain that repetition.  These are our utility functions
 //
 // <a name="throwIfFalsey"></a>
 // ## Throw If Falsey
@@ -2817,6 +2786,10 @@ function throwIfFalsey(thingToTest, reason, Ctor = Error) {
 //
 // <a name="getUniformLocation"></a>
 // ## getUniformLocation
+//
+// gets and validates that we got a uniform from our webgl program
+// there are more graceful ways to handle GL failures than throwing
+// and we'll be upgrading this later
 function getUniformLocation(gl, program, name) {
     const location = gl.getUniformLocation(program, name);
     if (!location) {
@@ -2827,6 +2800,50 @@ function getUniformLocation(gl, program, name) {
 //
 // <a name="getUniformSetters"></a>
 // ## getUniformSetters
+//
+// this function creates and object that models the uniforms in a given webgl
+// program
+//
+// if a uniform is a scalar/primitive (int, float, vec3, mat4) the object
+// will have a property with the same name, its value is a function that will set
+// the uniform
+//
+// if the uniform is an array, the object will have a property with the same name,
+// that is an array who's elements will be of the array's type
+//
+// if the unform is a struct type, the object will have a property with the same name,
+// its value will be a JS object who's properties will be of the types outlined in the
+// struct
+//
+// example:
+//
+// WebGL
+//
+// ```
+// uniform vec3 v3;
+// uniform int values[2];
+// 
+// struct Thing {
+//   int prop1;
+//   float prop2;
+// } 
+// uniform Thing thing;
+// ```
+// would convert to a JS object that looks like:
+//
+// ```
+// {
+//   v3: (arrayValue) => // sets uniform for you
+//   values: [(value) => /* sets uniform */, (value) => /* sets uniform */]
+//   thing: {
+//     prop1: (value) => // sets uniform
+//     prop2: (value) => // sets uniform
+//   } 
+// }
+// ```
+//
+// This allows the consumer to set things at a very granual (and inexpensive) level
+//
 function getUniformSetters(gl, program, desc) {
     const setVec3 = (loc, v) => {
         gl.uniform3fv(loc, v);
@@ -2878,8 +2895,14 @@ function getUniformSetters(gl, program, desc) {
     };
     return desc.reduce(createReduceUniformDescription(''), {});
 }
+//
+// <a name="tryCatch"></a>
+// ## tryCatch
+//
 // `try`/`catch` is notoriously hard for JS engines to optimize
 // let's hack around that
+// NOTE: We should avoid throwing in general, so hopefully we do not
+// use this too much
 function tryCatch(thing, happy, sad) {
     try {
         happy(thing());
@@ -2887,5 +2910,43 @@ function tryCatch(thing, happy, sad) {
     catch (e) {
         sad(e);
     }
+}
+//
+// <a name="glslAccessor"></a>
+// ## glslAccessor
+//
+// WebGL 1.0 shaders do not allow us to arbitrarily access an array elemetn.  For example
+//
+// ```
+// uniform int a;
+// uniform int foo[5];
+//
+// void main() {
+//   int b = foo[a]; // NOT ALLOWED 😭
+// }
+// ```
+//
+// we can work around this limitation by writing a switch/case statement, which
+// we also don't have, so we'll use ifs 😂
+// we don't want to write those by hand if we don't have to though
+//
+// let's automate
+function glslAccessor(type, uniformName, functionName, length, defaultElement = 0) {
+    // setup a string with the function declaration
+    let str = `${type} ${functionName}(int index) {
+`;
+    // write an if that returns all the known values
+    for (let i = 0; i < length; i += 1) {
+        str += `  if (index == ${i}) {
+    return ${uniformName}[${i}];
+  }
+`;
+    }
+    // return the default in all other cases
+    str += `  return ${uniformName}[${defaultElement}];
+}
+`;
+    console.log(str);
+    return str;
 }
 //# sourceMappingURL=index.js.map

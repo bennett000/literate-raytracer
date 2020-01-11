@@ -740,40 +740,10 @@ function getFragmentSource(config: ConfigShader) {
     }
 ` +
 
+
+
 // hack around GLSL's inability to index arrays
-`
-    Material getMaterial(int index) {
-        if (index == 0) {
-            return materials[0];
-        }
-
-        if (index == 1) {
-            return materials[1];
-        }
-
-        if (index == 2) {
-            return materials[2];
-        }
-
-        if (index == 3) {
-            return materials[3];
-        }
-
-        if (index == 4) {
-            return materials[4];
-        }
-
-        if (index == 5) {
-            return materials[5];
-        }
-
-        if (index == 6) {
-            return materials[6];
-        }
-
-        return materials[0];
-    }
-` +
+glslAccessor('Material', 'materials', 'getMaterial', materialCount, 0) +
 
 // PBR Computations
 // essentially straight from [Learn OpenGL](https://learnopengl.com/PBR/Theory "Learn OpenGL`")
