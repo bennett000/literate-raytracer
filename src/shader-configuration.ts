@@ -7,6 +7,14 @@ function getShaderConfiguration(scene: Scene) {
   // We're doing this to stop WebGL from complaining that `1` is not a float
   // this version of GLSL will want a full `1.0`
   return {
+    // acceleration config
+    acceleration: {
+      // how many "plane set normals" will we have (note we have no plans for this _not_
+      // to be 7, this is here for deduplication)
+      numPlaneSetNormals: 7,
+      // how many "extents" objects do we have in our accelerator?
+      numExtents: 1,
+    },
     // The colour of the background (if rays hit nothing this is the colour of the pixel) 
     bg: {
       r: '0.05',
@@ -20,6 +28,8 @@ function getShaderConfiguration(scene: Scene) {
     // the ends which can make comparisions tricky.  `epsilon` gives us a small value
     // we can use to help work around some of the even smaller decimals.
     epsilon: '0.00005',
+    // we need a proxy for infinity
+    infinity: '99999999999999999999999999999999999999.0',
     // how many lights are in the scene?
     lightCount: scene.lights.length,
     // how many materials are in the scene?

@@ -352,7 +352,33 @@ const g_cube = (function () {
     return triangles;
 }());
 //
-// <a name="crateShader"></a>
+// <a name="getGlError"></a>
+// ### getGlError
+//
+// sometimes we'll want to query WebGL for errors
+function getGlError(gl) {
+    const error = gl.getError();
+    switch (error) {
+        case gl.NO_ERROR:
+            return '';
+        case gl.INVALID_ENUM:
+            return 'invalid enum';
+        case gl.INVALID_VALUE:
+            return 'invalid value';
+        case gl.INVALID_OPERATION:
+            return 'invalid operation';
+        case gl.INVALID_FRAMEBUFFER_OPERATION:
+            return 'invalid framebuffer operation';
+        case gl.OUT_OF_MEMORY:
+            return 'out of memory';
+        case gl.CONTEXT_LOST_WEBGL:
+            return 'lost context';
+        default:
+            return 'unknown GL error';
+    }
+}
+//
+// <a name="createShader"></a>
 // ### createShader
 //
 // We need a mechanism for compiling shader programs and checking if they failed to compile.
@@ -372,11 +398,14 @@ function createShader(gl, type, source) {
     if (success) {
         return shader;
     }
-    // if it's not okay let's figure out why
-    const log = gl.getShaderInfoLog(shader);
-    // and we'll clean up
-    gl.deleteShader(shader);
-    console.error(log);
+    // if we fail there might be some more info
+    if (gl.isContextLost() === false) {
+        // if it's not okay let's figure out why
+        const log = gl.getShaderInfoLog(shader);
+        // and we'll clean up
+        gl.deleteShader(shader);
+        console.error('raw shader log: ' + log);
+    }
     return null;
 }
 //
@@ -398,19 +427,40 @@ function createProgram(gl, vertexShader, fragmentShader) {
     }
     // then we can attach the two shaders via reference
     gl.attachShader(program, vertexShader);
+    let err = getGlError(gl);
+    if (err) {
+        console.error('Attach Vertex GL Error', err);
+        return null;
+    }
     gl.attachShader(program, fragmentShader);
+    err = getGlError(gl);
+    if (err) {
+        console.error('Attach Fragment GL Error', err);
+        return null;
+    }
     // and finally call link
     gl.linkProgram(program);
+    err = getGlError(gl);
+    if (err) {
+        console.error('Link GL Error', err);
+        return null;
+    }
     // Again, we need to manually check for success
     const success = gl.getProgramParameter(program, gl.LINK_STATUS);
     if (success) {
         return program;
     }
-    // and if things are bad, let's find out why
-    const log = gl.getProgramInfoLog(program);
-    // and clean up
-    gl.deleteProgram(program);
-    console.error(log);
+    // if we fail there might be some more info
+    if (gl.isContextLost() === false) {
+        // and if things are bad, let's find out why
+        const log = 'Vertex log: ' + gl.getShaderInfoLog(vertexShader) + '\n' +
+            'Fragment log: ' + gl.getShaderInfoLog(fragmentShader) + '\n' +
+            'Program log: ' + gl.getProgramInfoLog(program) + '\n' +
+            'GL Error: ' + getGlError(gl);
+        // and clean up
+        gl.deleteProgram(program);
+        console.error('raw program log: ' + log);
+    }
     return null;
 }
 //
@@ -600,29 +650,20 @@ function getUniformDescription(shaderConfig) {
         {
             children: [
                 {
-                    name: 'a',
-                    type: 'vec3',
-                },
-                {
-                    name: 'b',
-                    type: 'vec3',
-                },
-                {
-                    name: 'c',
-                    type: 'vec3',
-                },
-                {
-                    name: 'material',
+                    name: 'length',
                     type: 'int',
                 },
                 {
-                    name: 'normal',
-                    type: 'vec3',
+                    name: 'size',
+                    type: 'int',
                 },
             ],
-            length: shaderConfig.triangleCount,
             name: 'triangles',
             type: 'struct',
+        },
+        {
+            name: 'trianglesData',
+            type: 'sampler2D',
         },
     ];
 }
@@ -1933,10 +1974,56 @@ function getScene(sphereCount = 57, minOrbit = 3) {
     };
 }
 //
+// <a name="encodeTriangle"></a>
+// ## encodeTriangle
+function encodeTriangles(scene) {
+    const size = /* a */ 3 + /* b */ 3 + /* c */ +3 + /* normal */ +3 + /* material */ +1;
+    const sizeRaw = size * 4;
+    const length = scene.triangles.length;
+    const width = length * size;
+    const lengthRaw = width * 4;
+    const data = new Uint8Array(lengthRaw);
+    scene.triangleNormals((normal, t, i) => {
+        const pointer = i * sizeRaw;
+        const insertPoint = (point, index) => {
+            const x = fourByteFromFloat(point[0]);
+            const y = fourByteFromFloat(point[1]);
+            const z = fourByteFromFloat(point[2]);
+            data[index + 0] = x[0];
+            data[index + 1] = x[1];
+            data[index + 2] = x[2];
+            data[index + 3] = x[3];
+            data[index + 4] = y[0];
+            data[index + 5] = y[1];
+            data[index + 6] = y[2];
+            data[index + 7] = y[3];
+            data[index + 8] = z[0];
+            data[index + 9] = z[1];
+            data[index + 10] = z[2];
+            data[index + 11] = z[3];
+        };
+        insertPoint(t.points[0], 0 + pointer);
+        insertPoint(t.points[1], 12 + pointer);
+        insertPoint(t.points[2], 24 + pointer);
+        insertPoint(normal, 36 + pointer);
+        const material = fourByteFromFloat(t.material);
+        data[48 + pointer] = material[0];
+        data[49 + pointer] = material[1];
+        data[50 + pointer] = material[2];
+        data[51 + pointer] = material[3];
+    }, false);
+    return {
+        data,
+        length,
+        size,
+        width,
+    };
+}
+//
 // <a name="setupScene"></a>
 // ## setupScene
 function setupScene(gl, context, scene, shaderConfig) {
-    const { camera, materials, spheres, triangleNormals, lights } = scene;
+    const { camera, materials, spheres, lights } = scene;
     // in typscript we're cheating with an any here
     const u = getUniformSetters(gl, context.program, getUniformDescription(shaderConfig));
     const cameraMatrix = zRotate4_4(yRotate4_4(xRotate4_4(translate4_4(identity4_4(), camera.point[0], camera.point[1], camera.point[2]), camera.rotation[0]), camera.rotation[1]), camera.rotation[2]);
@@ -1973,13 +2060,18 @@ function setupScene(gl, context, scene, shaderConfig) {
     lights.forEach((l, i) => {
         u.pointLights[i].point(l);
     });
-    triangleNormals((normal, t, i) => {
-        u.triangles[i].a(t.points[0]);
-        u.triangles[i].b(t.points[1]);
-        u.triangles[i].c(t.points[2]);
-        u.triangles[i].normal(normal);
-        u.triangles[i].material(t.material);
-    }, false);
+    const triangles = encodeTriangles(scene);
+    const triangleTexture = gl.createTexture();
+    throwIfFalsey(triangleTexture, 'could not create data texture');
+    gl.bindTexture(gl.TEXTURE_2D, triangleTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, triangles.width, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, triangles.data);
+    u.triangles.length(triangles.length);
+    u.triangles.size(triangles.size);
+    u.trianglesData(triangleTexture, 0);
     return u;
 }
 // ## Shader Configuration
@@ -1991,6 +2083,14 @@ function getShaderConfiguration(scene) {
     // We're doing this to stop WebGL from complaining that `1` is not a float
     // this version of GLSL will want a full `1.0`
     return {
+        // acceleration config
+        acceleration: {
+            // how many "plane set normals" will we have (note we have no plans for this _not_
+            // to be 7, this is here for deduplication)
+            numPlaneSetNormals: 7,
+            // how many "extents" objects do we have in our accelerator?
+            numExtents: 1,
+        },
         // The colour of the background (if rays hit nothing this is the colour of the pixel) 
         bg: {
             r: '0.05',
@@ -2004,6 +2104,8 @@ function getShaderConfiguration(scene) {
         // the ends which can make comparisions tricky.  `epsilon` gives us a small value
         // we can use to help work around some of the even smaller decimals.
         epsilon: '0.00005',
+        // we need a proxy for infinity
+        infinity: '99999999999999999999999999999999999999.0',
         // how many lights are in the scene?
         lightCount: scene.lights.length,
         // how many materials are in the scene?
@@ -2068,7 +2170,7 @@ function getVertexSource() {
 // each pixel
 function getFragmentSource(config) {
     // for brevity's sake break out the config values
-    const { bg, defaultF0, epsilon, lightCount, materialCount, phongSpecularExp, sphereCount, triangleCount, } = config;
+    const { acceleration, bg, defaultF0, epsilon, infinity, lightCount, materialCount, phongSpecularExp, sphereCount, triangleCount, } = config;
     // Then we'll get into the source
     // we start by telling WebGL what level of precision we require with floats
     // we could probably get away with highp but mediump is more universally supported
@@ -2145,6 +2247,23 @@ function getFragmentSource(config) {
         float v;
     };
 ` +
+        // `ExtentsIntersect` describe the intersection of a ray with an extents boundary
+        `
+    struct ExtentsIntersect {
+        float tNear;
+        float tFar;
+        int planeIndex;
+    };
+` +
+        // `TextureDataStructure` describes the most basic information about how a texture is 
+        // encoded `length` is the number of records and `size` is the number of vec4 (RGBA)
+        // blocks in each record
+        `
+    struct TextureDataStructure {
+        int length;
+        int size;
+    };
+` +
         // `PointLight` is a wrapper around a `point`, lights will have colours in the future
         `
     struct PointLight {
@@ -2195,7 +2314,8 @@ function getFragmentSource(config) {
     uniform Material materials[${materialCount}];
     uniform Sphere spheres[${sphereCount}];
     uniform PointLight pointLights[${lightCount}];
-    uniform Triangle triangles[${triangleCount}];
+    uniform sampler2D trianglesData;
+    uniform TextureDataStructure triangles;
 ` +
         // in GLSL if you want to call your functions "out of the order their written" you'll
         // need to declare them upfront
@@ -2219,6 +2339,22 @@ function getFragmentSource(config) {
     float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness);
     vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness);
     Material getMaterial(int index);
+    Triangle getTriangle(int index);
+    float fourByteToFloat(vec4 value, bool isUnsigned);
+` +
+        // acceleration data structure requirements
+        `
+    vec3 planeSetNormals[${acceleration.numPlaneSetNormals}];
+    
+    void initPlaneSetNormals() {
+      planeSetNormals[0] = vec3(1.0, 0.0, 0.0);
+      planeSetNormals[1] = vec3(0.0, 1.0, 0.0); 
+      planeSetNormals[2] = vec3(0.0, 0.0, 1.0); 
+      planeSetNormals[3] = vec3( sqrt(3.0) / 3.0,  sqrt(3.0) / 3.0, sqrt(3.0) / 3.0); 
+      planeSetNormals[4] = vec3(-sqrt(3.0) / 3.0,  sqrt(3.0) / 3.0, sqrt(3.0) / 3.0); 
+      planeSetNormals[5] = vec3(-sqrt(3.0) / 3.0, -sqrt(3.0) / 3.0, sqrt(3.0) / 3.0); 
+      planeSetNormals[6] = vec3( sqrt(3.0) / 3.0, -sqrt(3.0) / 3.0, sqrt(3.0) / 3.0);
+    }
 ` +
         //
         // <a name="fragmentMain"></a>
@@ -2227,7 +2363,10 @@ function getFragmentSource(config) {
         // Like the vector shader, the fragment shader also has to have a main function
         // in the fragment shader, our requirement is to set `gl_FragColor`.  `gl_FragColor` is
         // a `vec4` r/g/b/a
+        //
+        // we'll also initialize any constant arrays we have
         `    void main() {
+      initPlaneSetNormals();
 ` +
         // we'll support casting 2, 4, or 1 rays from the camera to _this_ pixel
         // the more rays the better the anti-aliasing.  That said these values literally
@@ -2450,7 +2589,7 @@ function getFragmentSource(config) {
             0.0);
 
         for (int i = 0; i < ${triangleCount}; i += 1) {
-            Triangle t = triangles[i];
+            Triangle t = getTriangle(i);
             TriangleDistance td = triangleIntersection(t, ray);
             if (td.distance >= 0.0) {
                 // we're temporarily hacking in an object that casts no shadow 
@@ -2524,6 +2663,40 @@ function getFragmentSource(config) {
         }
 
         return v - sqrt(discriminant);
+    }
+` +
+        // ray "extents" intersection
+        `
+    // ExtentsIntersect extentsIntersection() {
+    //     for (int i = 0; i < ${acceleration.numPlaneSetNormals}; i += 1) {
+    //         float tNearExtents = (d[i][0] - precomputedNumerator[i]) / precomputedDenominator[i];
+    //     float tFarExtents = (d[i][1] - precomputedNumerator[i]) / precomputedDenominator[i];
+    //     if (precomputedDenominator[i] < 0) std::swap(tNearExtents, tFarExtents);
+    //     if (tNearExtents > tNear) tNear = tNearExtents, planeIndex = i;
+    //     if (tFarExtents < tFar) tFar = tFarExtents;
+    //     if (tNear > tFar) return false;
+    //     }
+    // }
+` +
+        // ray bounding volume hierarchy intersection
+        `
+    bool bvhIntersection(Ray ray) {
+        float preComputedNumerator[${acceleration.numPlaneSetNormals}];
+        float preComputedDenominator[${acceleration.numPlaneSetNormals}];
+
+        for (int i = 0; i < ${acceleration.numPlaneSetNormals}; i += 1) {
+            preComputedNumerator[i] = dot(planeSetNormals[i], ray.point);
+            preComputedDenominator[i] = dot(planeSetNormals[i], ray.vector);
+        }
+
+        int planeIndex;
+        float tNear = 0.0; 
+        float tFar = ${infinity}; // tNear, tFar for the intersected extents
+        
+        // if (!octree->root->nodeExtents.intersect(precomputedNumerator, precomputedDenominator, tNear, tFar, planeIndex) || tFar < 0)
+        // return false;
+
+        return false;
     }
 ` +
         // is there a light visible from a point? (shadows)
@@ -2767,6 +2940,83 @@ function getFragmentSource(config) {
     vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
         return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(1.0 - cosTheta, 5.0);
     }   
+` +
+        // we will need some functions to transform data in data structures to more meaningful
+        // structures we can work with
+        //
+        // getTriangle
+        `
+    vec2 indexToCoord(int index, float len, int offset) {
+        return vec2(
+            (float(index + offset) + 0.5) / len,
+            0.0
+        );
+    }
+
+    Triangle getTriangle(int index) {
+        int expandedIndex = index * triangles.size;
+        float len = float(triangles.size * triangles.length);
+
+        vec3 a = vec3(
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 0)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 1)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 2)), false)
+        );
+
+        vec3 b = vec3(
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 3)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 4)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 5)), false)
+        );
+
+        vec3 c = vec3(
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 6)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 7)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 8)), false)
+        );
+
+        vec3 normal = vec3(
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 9)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 10)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 11)), false)
+        );
+
+        int material = int(fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 12)), false));
+
+        // return Triangle(vec3(25.0, 0.0, -25.0), vec3(-25.0, 0.0, -25.0), vec3(-25.0, 0.0, 25.0), vec3(0.0, 1.0, 0.0), 0);
+        return Triangle(a, b, c, normal, material);
+    }
+` +
+        // we need a function to convert encoded floats back to floats
+        // this is interesting as JS converts to RGBA unsigned integers, then
+        // GL converts those to 0.0-1.0 range, then we convert that back to integers
+        // and finally back to floats 
+        `
+// ----------------------------------------------------------------------------
+    float fourByteToFloat(vec4 value, bool isUnsigned) {
+        /** NOTE also converts from float percentages of 255 to "whole" numbers */
+        float sign;
+        float bigEndOrZero;
+        float bigEnd;
+
+        if (isUnsigned == true) {
+            return float(value.r * 255.0 * 256.0 * 256.0 * 256.0 + 
+                        value.g * 255.0 * 256.0 * 256.0 +
+                        value.b * 255.0 * 256.0 +
+                        value.a * 255.0);
+        } else {
+            sign = value.r * 255.0 > 127.0 ? -1.0 : 1.0; 
+            bigEndOrZero = value.r * 255.0 == 255.0 ? 0.0 : value.r;
+            bigEnd = bigEndOrZero > 127.0 ? bigEndOrZero - 127.0 : bigEndOrZero;
+
+            return sign * (
+            bigEnd * 255.0 * 256.0 * 256.0 * 256.0 +
+            value.g * 255.0 * 256.0 * 256.0 +
+            value.b * 255.0 * 256.0 +
+            value.a * 255.0
+            );
+        }
+    }
 // ----------------------------------------------------------------------------
 `;
 }
@@ -2863,6 +3113,12 @@ function getUniformSetters(gl, program, desc) {
                 return (value) => setFloat(loc, value);
             case 'mat4':
                 return (value) => gl.uniformMatrix4fv(loc, false, value);
+            case 'sampler2D':
+                return (texture, unit) => {
+                    gl.activeTexture(gl[`TEXTURE${unit}`]);
+                    gl.bindTexture(gl.TEXTURE_2D, texture);
+                    gl.uniform1i(loc, unit);
+                };
             case 'vec3':
                 return (value) => setVec3(loc, value);
             default:
@@ -2946,7 +3202,48 @@ function glslAccessor(type, uniformName, functionName, length, defaultElement = 
     str += `  return ${uniformName}[${defaultElement}];
 }
 `;
-    console.log(str);
     return str;
+}
+//
+// <a name="fourByteFromFloat"></a>
+// ## fourByteFromFloat
+//
+// we're going to be packing data into WebGL textures and that's going to require
+// us to encode JavaScript floats into 4x unsigned byte RGBA values
+function fourByteFromFloat(float, bytes = new Uint8Array(4), unsigned = false) {
+    const positiveFloat = float < 0 ? float * -1 : float;
+    const bit0 = positiveFloat % 256;
+    let bit1 = Math.floor(positiveFloat / 256);
+    let bit2 = 0;
+    let bit3 = 0;
+    if (bit1 > 255) {
+        bit2 = Math.floor(positiveFloat / 256 / 256);
+        bit1 = bit1 % 256;
+    }
+    if (bit2 > 255) {
+        bit3 = Math.floor(positiveFloat / 256 / 256 / 256);
+        bit2 = Math.floor(positiveFloat / 256 / 256) % 256;
+    }
+    if (bit3 > 255) {
+        bit3 = 255;
+    }
+    if (unsigned === false) {
+        if (bit3 > 127) {
+            bit3 = 127;
+        }
+        if (float < 0) {
+            if (bit3 === 0) {
+                bit3 = 255;
+            }
+            else {
+                bit3 += 127;
+            }
+        }
+    }
+    bytes[0] = bit3;
+    bytes[1] = bit2;
+    bytes[2] = bit1;
+    bytes[3] = bit0;
+    return bytes;
 }
 //# sourceMappingURL=index.js.map

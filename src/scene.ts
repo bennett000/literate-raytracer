@@ -240,10 +240,58 @@ function getScene(sphereCount = 57, minOrbit = 3) {
 }
 
 //
+// <a name="encodeTriangle"></a>
+// ## encodeTriangle
+function encodeTriangles(scene: Scene) {
+    const size = /* a */ 3 + /* b */ 3 + /* c */ + 3 + /* normal */ + 3 + /* material */ + 1;
+    const sizeRaw = size * 4;
+    const length = scene.triangles.length;
+    const width = length * size;
+    const lengthRaw = width * 4;
+    const data = new Uint8Array(lengthRaw);
+    scene.triangleNormals((normal, t, i) => {
+      const pointer = i * sizeRaw;
+      const insertPoint = (point: Matrix3_1, index: number) => {
+        const x = fourByteFromFloat(point[0]);
+        const y = fourByteFromFloat(point[1]);
+        const z = fourByteFromFloat(point[2]);
+        data[index + 0] = x[0];
+        data[index + 1] = x[1];
+        data[index + 2] = x[2];
+        data[index + 3] = x[3];
+        data[index + 4] = y[0];
+        data[index + 5] = y[1];
+        data[index + 6] = y[2];
+        data[index + 7] = y[3];
+        data[index + 8] = z[0];
+        data[index + 9] = z[1];
+        data[index + 10] = z[2];
+        data[index + 11] = z[3];
+      };
+      insertPoint(t.points[0], 0 + pointer);
+      insertPoint(t.points[1], 12 + pointer);
+      insertPoint(t.points[2], 24 + pointer);
+      insertPoint(normal, 36 + pointer);
+      const material = fourByteFromFloat(t.material);
+      data[48 + pointer] = material[0];
+      data[49 + pointer] = material[1];
+      data[50 + pointer] = material[2];
+      data[51 + pointer] = material[3];
+    }, false);
+
+    return {
+      data,
+      length,
+      size,
+      width,
+    };
+}
+
+//
 // <a name="setupScene"></a>
 // ## setupScene
 function setupScene(gl: WebGLRenderingContext, context: ProgramContext, scene: Scene, shaderConfig: ConfigShader) {
-    const { camera, materials, spheres, triangleNormals, lights } = scene;
+    const { camera, materials, spheres, lights } = scene;
     // in typscript we're cheating with an any here
     const u: any = getUniformSetters(gl, context.program, getUniformDescription(shaderConfig));
 
@@ -290,13 +338,19 @@ function setupScene(gl: WebGLRenderingContext, context: ProgramContext, scene: S
         u.pointLights[i].point(l);
     });
 
-    triangleNormals((normal, t, i) => {
-        u.triangles[i].a(t.points[0]);
-        u.triangles[i].b(t.points[1]);
-        u.triangles[i].c(t.points[2]);
-        u.triangles[i].normal(normal);
-        u.triangles[i].material(t.material);
-    }, false);
+    const triangles = encodeTriangles(scene);
+    const triangleTexture = gl.createTexture();
+    throwIfFalsey(triangleTexture, 'could not create data texture');
+    gl.bindTexture(gl.TEXTURE_2D, triangleTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, triangles.width, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, triangles.data);
+
+    u.triangles.length(triangles.length);
+    u.triangles.size(triangles.size);
+    u.trianglesData(triangleTexture, 0);
 
     return u;
 }

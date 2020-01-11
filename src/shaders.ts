@@ -50,7 +50,7 @@ function getVertexSource() {
 function getFragmentSource(config: ConfigShader) {
   // for brevity's sake break out the config values
   const { 
-    bg, defaultF0, epsilon,
+    acceleration, bg, defaultF0, epsilon, infinity,
     lightCount, materialCount, 
     phongSpecularExp, 
     sphereCount, triangleCount,
@@ -141,6 +141,26 @@ function getFragmentSource(config: ConfigShader) {
     };
 ` +
 
+// `ExtentsIntersect` describe the intersection of a ray with an extents boundary
+`
+    struct ExtentsIntersect {
+        float tNear;
+        float tFar;
+        int planeIndex;
+    };
+` +
+
+// `TextureDataStructure` describes the most basic information about how a texture is 
+// encoded `length` is the number of records and `size` is the number of vec4 (RGBA)
+// blocks in each record
+`
+    struct TextureDataStructure {
+        int length;
+        int size;
+    };
+` +
+
+
 // `PointLight` is a wrapper around a `point`, lights will have colours in the future
 `
     struct PointLight {
@@ -194,7 +214,8 @@ function getFragmentSource(config: ConfigShader) {
     uniform Material materials[${materialCount}];
     uniform Sphere spheres[${sphereCount}];
     uniform PointLight pointLights[${lightCount}];
-    uniform Triangle triangles[${triangleCount}];
+    uniform sampler2D trianglesData;
+    uniform TextureDataStructure triangles;
 ` +
 
 // in GLSL if you want to call your functions "out of the order their written" you'll
@@ -219,7 +240,25 @@ function getFragmentSource(config: ConfigShader) {
     float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness);
     vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness);
     Material getMaterial(int index);
+    Triangle getTriangle(int index);
+    float fourByteToFloat(vec4 value, bool isUnsigned);
 ` +
+
+// acceleration data structure requirements
+`
+    vec3 planeSetNormals[${acceleration.numPlaneSetNormals}];
+    
+    void initPlaneSetNormals() {
+      planeSetNormals[0] = vec3(1.0, 0.0, 0.0);
+      planeSetNormals[1] = vec3(0.0, 1.0, 0.0); 
+      planeSetNormals[2] = vec3(0.0, 0.0, 1.0); 
+      planeSetNormals[3] = vec3( sqrt(3.0) / 3.0,  sqrt(3.0) / 3.0, sqrt(3.0) / 3.0); 
+      planeSetNormals[4] = vec3(-sqrt(3.0) / 3.0,  sqrt(3.0) / 3.0, sqrt(3.0) / 3.0); 
+      planeSetNormals[5] = vec3(-sqrt(3.0) / 3.0, -sqrt(3.0) / 3.0, sqrt(3.0) / 3.0); 
+      planeSetNormals[6] = vec3( sqrt(3.0) / 3.0, -sqrt(3.0) / 3.0, sqrt(3.0) / 3.0);
+    }
+` + 
+
 
 //
 // <a name="fragmentMain"></a>
@@ -228,7 +267,10 @@ function getFragmentSource(config: ConfigShader) {
 // Like the vector shader, the fragment shader also has to have a main function
 // in the fragment shader, our requirement is to set `gl_FragColor`.  `gl_FragColor` is
 // a `vec4` r/g/b/a
+//
+// we'll also initialize any constant arrays we have
 `    void main() {
+      initPlaneSetNormals();
 ` + 
 // we'll support casting 2, 4, or 1 rays from the camera to _this_ pixel
 // the more rays the better the anti-aliasing.  That said these values literally
@@ -456,7 +498,7 @@ function getFragmentSource(config: ConfigShader) {
             0.0);
 
         for (int i = 0; i < ${triangleCount}; i += 1) {
-            Triangle t = triangles[i];
+            Triangle t = getTriangle(i);
             TriangleDistance td = triangleIntersection(t, ray);
             if (td.distance >= 0.0) {
                 // we're temporarily hacking in an object that casts no shadow 
@@ -531,6 +573,44 @@ function getFragmentSource(config: ConfigShader) {
         }
 
         return v - sqrt(discriminant);
+    }
+` +
+
+// ray "extents" intersection
+
+`
+    // ExtentsIntersect extentsIntersection() {
+    //     for (int i = 0; i < ${acceleration.numPlaneSetNormals}; i += 1) {
+    //         float tNearExtents = (d[i][0] - precomputedNumerator[i]) / precomputedDenominator[i];
+    //     float tFarExtents = (d[i][1] - precomputedNumerator[i]) / precomputedDenominator[i];
+    //     if (precomputedDenominator[i] < 0) std::swap(tNearExtents, tFarExtents);
+    //     if (tNearExtents > tNear) tNear = tNearExtents, planeIndex = i;
+    //     if (tFarExtents < tFar) tFar = tFarExtents;
+    //     if (tNear > tFar) return false;
+    //     }
+    // }
+` +
+
+// ray bounding volume hierarchy intersection
+
+`
+    bool bvhIntersection(Ray ray) {
+        float preComputedNumerator[${acceleration.numPlaneSetNormals}];
+        float preComputedDenominator[${acceleration.numPlaneSetNormals}];
+
+        for (int i = 0; i < ${acceleration.numPlaneSetNormals}; i += 1) {
+            preComputedNumerator[i] = dot(planeSetNormals[i], ray.point);
+            preComputedDenominator[i] = dot(planeSetNormals[i], ray.vector);
+        }
+
+        int planeIndex;
+        float tNear = 0.0; 
+        float tFar = ${infinity}; // tNear, tFar for the intersected extents
+        
+        // if (!octree->root->nodeExtents.intersect(precomputedNumerator, precomputedDenominator, tNear, tFar, planeIndex) || tFar < 0)
+        // return false;
+
+        return false;
     }
 ` +
 
@@ -741,7 +821,6 @@ function getFragmentSource(config: ConfigShader) {
 ` +
 
 
-
 // hack around GLSL's inability to index arrays
 glslAccessor('Material', 'materials', 'getMaterial', materialCount, 0) +
 
@@ -784,6 +863,87 @@ glslAccessor('Material', 'materials', 'getMaterial', materialCount, 0) +
     vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
         return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(1.0 - cosTheta, 5.0);
     }   
+` + 
+
+// we will need some functions to transform data in data structures to more meaningful
+// structures we can work with
+//
+// getTriangle
+
+`
+    vec2 indexToCoord(int index, float len, int offset) {
+        return vec2(
+            (float(index + offset) + 0.5) / len,
+            0.0
+        );
+    }
+
+    Triangle getTriangle(int index) {
+        int expandedIndex = index * triangles.size;
+        float len = float(triangles.size * triangles.length);
+
+        vec3 a = vec3(
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 0)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 1)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 2)), false)
+        );
+
+        vec3 b = vec3(
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 3)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 4)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 5)), false)
+        );
+
+        vec3 c = vec3(
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 6)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 7)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 8)), false)
+        );
+
+        vec3 normal = vec3(
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 9)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 10)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 11)), false)
+        );
+
+        int material = int(fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 12)), false));
+
+        // return Triangle(vec3(25.0, 0.0, -25.0), vec3(-25.0, 0.0, -25.0), vec3(-25.0, 0.0, 25.0), vec3(0.0, 1.0, 0.0), 0);
+        return Triangle(a, b, c, normal, material);
+    }
+` +
+
+
+// we need a function to convert encoded floats back to floats
+// this is interesting as JS converts to RGBA unsigned integers, then
+// GL converts those to 0.0-1.0 range, then we convert that back to integers
+// and finally back to floats 
+`
+// ----------------------------------------------------------------------------
+    float fourByteToFloat(vec4 value, bool isUnsigned) {
+        /** NOTE also converts from float percentages of 255 to "whole" numbers */
+        float sign;
+        float bigEndOrZero;
+        float bigEnd;
+
+        if (isUnsigned == true) {
+            return float(value.r * 255.0 * 256.0 * 256.0 * 256.0 + 
+                        value.g * 255.0 * 256.0 * 256.0 +
+                        value.b * 255.0 * 256.0 +
+                        value.a * 255.0);
+        } else {
+            sign = value.r * 255.0 > 127.0 ? -1.0 : 1.0; 
+            bigEndOrZero = value.r * 255.0 == 255.0 ? 0.0 : value.r;
+            bigEnd = bigEndOrZero > 127.0 ? bigEndOrZero - 127.0 : bigEndOrZero;
+
+            return sign * (
+            bigEnd * 255.0 * 256.0 * 256.0 * 256.0 +
+            value.g * 255.0 * 256.0 * 256.0 +
+            value.b * 255.0 * 256.0 +
+            value.a * 255.0
+            );
+        }
+    }
 // ----------------------------------------------------------------------------
 `;
   }

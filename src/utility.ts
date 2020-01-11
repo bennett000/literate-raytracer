@@ -35,7 +35,7 @@ interface UniformDescription {
 }
 
 interface UniformSetter {
-    (value: any): void;
+    (value: any, unit?: any): void;
 }
 
 interface UniformDictionary {
@@ -113,6 +113,12 @@ function getUniformSetters(gl: WebGLRenderingContext, program: WebGLProgram, des
                 return (value: number) => setFloat(loc, value);
             case 'mat4':
                 return (value: Matrix4_4) => gl.uniformMatrix4fv(loc, false, value);
+            case 'sampler2D':
+                return (texture: WebGLTexture, unit: number) => {
+                    gl.activeTexture((gl as any)[`TEXTURE${unit}`]);
+                    gl.bindTexture(gl.TEXTURE_2D, texture);
+                    gl.uniform1i(loc, unit);
+                };
             case 'vec3':
                 return (value: Matrix3_1) => setVec3(loc, value);
             default:
@@ -209,6 +215,55 @@ function glslAccessor(type: string, uniformName: string, functionName: string, l
 }
 `;
 
-  console.log(str);
   return str;
+}
+
+//
+// <a name="fourByteFromFloat"></a>
+// ## fourByteFromFloat
+//
+// we're going to be packing data into WebGL textures and that's going to require
+// us to encode JavaScript floats into 4x unsigned byte RGBA values
+function fourByteFromFloat(
+  float: number, bytes = new Uint8Array(4), unsigned = false
+) {
+  const positiveFloat = float < 0 ? float * -1 : float;
+  const bit0 = positiveFloat % 256;
+  let bit1 = Math.floor(positiveFloat / 256);
+  let bit2 = 0;
+  let bit3 = 0;
+
+  if (bit1 > 255) {
+    bit2 = Math.floor(positiveFloat / 256 / 256);
+    bit1 = bit1 % 256;
+  }
+
+  if (bit2 > 255) {
+    bit3 = Math.floor(positiveFloat / 256 / 256 / 256);
+    bit2 = Math.floor(positiveFloat / 256 / 256) % 256;
+  }
+
+  if (bit3 > 255) {
+    bit3 = 255;
+  }
+
+  if (unsigned === false) {
+    if (bit3 > 127) {
+      bit3 = 127;
+    }
+    if (float < 0) {
+      if (bit3 === 0) {
+        bit3 = 255;
+      } else {
+        bit3 += 127
+      }
+    }
+  }
+
+  bytes[0] = bit3;
+  bytes[1] = bit2;
+  bytes[2] = bit1;
+  bytes[3] = bit0;
+
+  return bytes;
 }

@@ -9,7 +9,35 @@ interface ProgramContext {
 }
 
 //
-// <a name="crateShader"></a>
+// <a name="getGlError"></a>
+// ### getGlError
+//
+// sometimes we'll want to query WebGL for errors
+function getGlError(gl: WebGLRenderingContext) {
+  const error = gl.getError();
+  switch (error) {
+    case gl.NO_ERROR:
+      return '';
+    case gl.INVALID_ENUM:
+      return 'invalid enum';
+    case gl.INVALID_VALUE:
+      return 'invalid value';
+    case gl.INVALID_OPERATION:
+      return 'invalid operation';
+    case gl.INVALID_FRAMEBUFFER_OPERATION:
+      return 'invalid framebuffer operation';
+    case gl.OUT_OF_MEMORY:
+      return 'out of memory';
+    case gl.CONTEXT_LOST_WEBGL:
+      return 'lost context';
+    default:
+      return 'unknown GL error';
+  }
+}
+
+
+//
+// <a name="createShader"></a>
 // ### createShader
 //
 // We need a mechanism for compiling shader programs and checking if they failed to compile.
@@ -32,12 +60,16 @@ function createShader(gl: WebGLRenderingContext, type: number, source: string) {
     return shader;
   }
 
-  // if it's not okay let's figure out why
-  const log = gl.getShaderInfoLog(shader);
-  // and we'll clean up
-  gl.deleteShader(shader);
+  // if we fail there might be some more info
+  if (gl.isContextLost() === false) {
+    // if it's not okay let's figure out why
+    const log = gl.getShaderInfoLog(shader);
+    // and we'll clean up
+    gl.deleteShader(shader);
 
-  console.error(log);
+    console.error('raw shader log: ' + log);
+  }
+
   return null;
 }
 
@@ -65,10 +97,25 @@ function createProgram(
 
   // then we can attach the two shaders via reference
   gl.attachShader(program, vertexShader);
+  let err = getGlError(gl);
+  if (err) {
+    console.error('Attach Vertex GL Error', err)
+    return null;
+  }
   gl.attachShader(program, fragmentShader);
+  err = getGlError(gl);
+  if (err) {
+    console.error('Attach Fragment GL Error', err)
+    return null;
+  }
 
   // and finally call link
   gl.linkProgram(program);
+  err = getGlError(gl);
+  if (err) {
+    console.error('Link GL Error', err)
+    return null;
+  }
 
   // Again, we need to manually check for success
   const success = gl.getProgramParameter(program, gl.LINK_STATUS);
@@ -76,15 +123,20 @@ function createProgram(
     return program;
   }
 
-  // and if things are bad, let's find out why
-  const log = gl.getProgramInfoLog(program);
+  // if we fail there might be some more info
+  if (gl.isContextLost() === false) {
+    // and if things are bad, let's find out why
+    const log = 'Vertex log: ' + gl.getShaderInfoLog(vertexShader) + '\n' +
+      'Fragment log: ' + gl.getShaderInfoLog(fragmentShader) + '\n' +
+      'Program log: ' + gl.getProgramInfoLog(program) + '\n' +
+      'GL Error: ' + getGlError(gl);
 
-  // and clean up
-  gl.deleteProgram(program);
-  console.error(log);
+    // and clean up
+    gl.deleteProgram(program);
+    console.error('raw program log: ' + log);
+  }
   return null;
 }
-
 
 //
 // <a name="bindProgram"></a>
@@ -285,29 +337,20 @@ function getUniformDescription(shaderConfig: ConfigShader): UniformDescription[]
     {
       children: [
         {
-          name: 'a',
-          type: 'vec3',
-        },
-        {
-          name: 'b',
-          type: 'vec3',
-        },
-        {
-          name: 'c',
-          type: 'vec3',
-        },
-        {
-          name: 'material',
+          name: 'length',
           type: 'int',
         },
         {
-          name: 'normal',
-          type: 'vec3',
+          name: 'size',
+          type: 'int',
         },
       ],
-      length: shaderConfig.triangleCount,
       name: 'triangles',
       type: 'struct',
+    },
+    {
+      name: 'trianglesData',
+      type: 'sampler2D',
     },
   ];
 }
