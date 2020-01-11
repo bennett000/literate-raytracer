@@ -17,15 +17,16 @@ function getHtmlCanvas(log: Log, onLostContext: () => void) {
   //
   // let's add make sure we know when the system resets the GPU
   let lastTry = 0;
-  const onLost = () => {
+  const onRestore = () => {
     log.warn('Lost WebGL Context');
     tryCatch(onLostContext, () => lastTry = 0, (e: Error) => {
       console.error(e.message);
       log.error('Failed to restart WebGL ' + e.message);
-      setTimeout(onLost, lastTry++);
+      setTimeout(onRestore, lastTry++);
     });
   };
-  canvas.addEventListener('webglcontextlost', onLost);
+  canvas.addEventListener('webglcontextlost', (e: any) => e.preventDefault());
+  canvas.addEventListener('webglcontexrestored', onRestore);
 
   // we'll want to [resize](#resize, "Resize documentation")
   // to make sure our canvas is using all of the space it can
