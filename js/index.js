@@ -2941,47 +2941,50 @@ function getFragmentSource(config) {
         return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(1.0 - cosTheta, 5.0);
     }   
 ` +
+        // we will need a function that can get random data out of textures
+        `
+    vec2 indexToCoord(int index, float len) {
+        return vec2(
+            (float(index) + 0.5) / len,
+            0.0
+        );
+    }
+
+` +
         // we will need some functions to transform data in data structures to more meaningful
         // structures we can work with
         //
         // getTriangle
         `
-    vec2 indexToCoord(int index, float len, int offset) {
-        return vec2(
-            (float(index + offset) + 0.5) / len,
-            0.0
-        );
-    }
-
     Triangle getTriangle(int index) {
         int expandedIndex = index * triangles.size;
         float len = float(triangles.size * triangles.length);
 
         vec3 a = vec3(
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 0)), false),
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 1)), false),
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 2)), false)
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 0, len)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 1, len)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 2, len)), false)
         );
 
         vec3 b = vec3(
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 3)), false),
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 4)), false),
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 5)), false)
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 3, len)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 4, len)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 5, len)), false)
         );
 
         vec3 c = vec3(
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 6)), false),
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 7)), false),
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 8)), false)
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 6, len)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 7, len)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 8, len)), false)
         );
 
         vec3 normal = vec3(
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 9)), false),
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 10)), false),
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 11)), false)
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 9, len)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 10, len)), false),
+            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 11, len)), false)
         );
 
-        int material = int(fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex, len, 12)), false));
+        int material = int(fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 12, len)), false));
 
         // return Triangle(vec3(25.0, 0.0, -25.0), vec3(-25.0, 0.0, -25.0), vec3(-25.0, 0.0, 25.0), vec3(0.0, 1.0, 0.0), 0);
         return Triangle(a, b, c, normal, material);
