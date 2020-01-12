@@ -217,7 +217,7 @@ function bindProgram(gl: WebGLRenderingContext, vertexSource: string, fragmentSo
 function draw(gl: WebGLRenderingContext, context: ProgramContext, canvas: HTMLCanvasElement) {
   // if the screen resized, re-initatlize the scene
   if (resize(canvas)) {
-    setupScene(gl, context, g_scene, g_configShader);
+    setupScene(gl, g_scene, g_glState.uniforms);
   }
   // clear the screen
   gl.clear(gl.COLOR_BUFFER_BIT);

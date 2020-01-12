@@ -286,12 +286,29 @@ function encodeTriangles(scene: Scene) {
 }
 
 //
+// <a name="createDataTexture"></a>
+// ### createDataTexture
+//
+// we need a way of giving the GPU lots of data about things like verticies, bounding boxes
+// etc.  We can pack this info into a "data texture"
+function createDataTexture(gl: WebGLRenderingContext, width: number, height: number, data: Uint8Array) {
+    const texture = gl.createTexture();
+    throwIfFalsey(texture, 'could not create data texture');
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+
+    return texture;
+}
+
+//
 // <a name="setupScene"></a>
 // ## setupScene
-function setupScene(gl: WebGLRenderingContext, context: ProgramContext, scene: Scene, shaderConfig: ConfigShader) {
+function setupScene(gl: WebGLRenderingContext, scene: Scene, uniforms: any) {
     const { camera, materials, spheres, lights } = scene;
-    // in typscript we're cheating with an any here
-    const u: any = getUniformSetters(gl, context.program, getUniformDescription(shaderConfig));
 
     const cameraMatrix = 
     zRotate4_4(yRotate4_4(xRotate4_4(translate4_4(identity4_4(), camera.point[0], camera.point[1], camera.point[2]), camera.rotation[0]), camera.rotation[1]), camera.rotation[2]);
@@ -308,46 +325,43 @@ function setupScene(gl: WebGLRenderingContext, context: ProgramContext, scene: S
         cameraMatrix[14],
     ] as Matrix3_1;
 
-    u.aspectRatio(aspectRatio);
-    u.cameraMatrix(cameraMatrix);
-    u.cameraPos(origin);
-    u.height(height);
-    u.scale(scale);
-    u.width(width);
+    uniforms.aspectRatio(aspectRatio);
+    uniforms.cameraMatrix(cameraMatrix);
+    uniforms.cameraPos(origin);
+    uniforms.height(height);
+    uniforms.scale(scale);
+    uniforms.width(width);
 
-    console.log(u);
+    console.log(uniforms);
     materials.forEach((m, i) => {
-        u.materials[i].colourOrAlbedo(m.colour);
-        u.materials[i].ambient(m.ambient);
-        u.materials[i].diffuseOrRoughness(m.diffuse);
-        u.materials[i].specularOrMetallic(m.specular);
+        uniforms.materials[i].colourOrAlbedo(m.colour);
+        uniforms.materials[i].ambient(m.ambient);
+        uniforms.materials[i].diffuseOrRoughness(m.diffuse);
+        uniforms.materials[i].specularOrMetallic(m.specular);
         // u.materials[i].refraction(m.refraction);
-        u.materials[i].isTranslucent(m.isTranslucent);
+        uniforms.materials[i].isTranslucent(m.isTranslucent);
     });
 
     spheres.forEach((s, i) => {
-        u.spheres[i].radius(s.radius);
-        u.spheres[i].material(s.material);
-        u.spheres[i].point(s.point);
+        uniforms.spheres[i].radius(s.radius);
+        uniforms.spheres[i].material(s.material);
+        uniforms.spheres[i].point(s.point);
     });
 
     lights.forEach((l, i) => {
-        u.pointLights[i].point(l);
+        uniforms.pointLights[i].point(l);
     });
+}
 
+function setupDataTextures(gl: WebGLRenderingContext, scene: Scene, uniforms: any) {
     const triangles = encodeTriangles(scene);
-    const triangleTexture = gl.createTexture();
-    throwIfFalsey(triangleTexture, 'could not create data texture');
-    gl.bindTexture(gl.TEXTURE_2D, triangleTexture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, triangles.width, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, triangles.data);
+    const triangleTexture = createDataTexture(gl, triangles.width, 1, triangles.data);
 
-    u.triangles.length(triangles.length);
-    u.triangles.size(triangles.size);
-    u.trianglesData(triangleTexture, 0);
+    uniforms.triangles.length(triangles.length);
+    uniforms.triangles.size(triangles.size);
+    uniforms.trianglesData(triangleTexture, 0);
 
-    return u;
+    return {
+      triangles: triangleTexture,
+    };
 }

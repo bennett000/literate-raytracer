@@ -116,10 +116,11 @@ const g_configShader = getShaderConfiguration(g_scene);
 // context can be ["lost" at any time](https://www.khronos.org/webgl/wiki/HandlingContextLost "How to handle a lost rendering context")
 //
 // let's create a simple state object
-const g_glState: { ctx: null | ProgramContext, gl: null | WebGLRenderingContext, uniforms: any } = {
+const g_glState: { ctx: null | ProgramContext, gl: null | WebGLRenderingContext, textures: { [key: string]: WebGLTexture }, uniforms: any } = {
     ctx: null,
     gl: null,
     uniforms: null,
+    textures: {},
 };
 
 // let's make our GL setup code easy to repeat
@@ -147,7 +148,10 @@ const createStartWebGl = (logger: Log) => () => {
     }
 
     logger.log('Setup scene and bind uniforms');
-    g_glState.uniforms = setupScene(g_glState.gl, g_glState.ctx, g_scene, g_configShader);
+    // in typscript we're cheating with an any here
+    g_glState.uniforms = getUniformSetters(g_glState.gl, g_glState.ctx.program, getUniformDescription(g_configShader));
+    setupScene(g_glState.gl, g_scene, g_glState.uniforms);
+    g_glState.textures = setupDataTextures(g_glState.gl, g_scene, g_glState.uniforms);
 
     logger.log('Drawing');
     draw(g_glState.gl, g_glState.ctx, g_canvas);
