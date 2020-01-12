@@ -7,6 +7,8 @@ function getShaderConfiguration(scene: Scene) {
   // We're doing this to stop WebGL from complaining that `1` is not a float
   // this version of GLSL will want a full `1.0`
   return {
+    // anti aliasing, 1, 2, or 4
+    aa: 1,
     // acceleration config
     acceleration: {
       // how many "plane set normals" will we have (note we have no plans for this _not_
@@ -38,6 +40,9 @@ function getShaderConfiguration(scene: Scene) {
     // that helps us control specular (shiny) lighting
     // it's a string
     phongSpecularExp: '32.0',
+    // the shading model we'll be using
+    // 1 for Blinn Phong, 0 for PBR
+    shadingModel: 0,
     // how many spheres are in the scene?
     sphereCount: scene.spheres.length,
     // how many triangles are in the scene?

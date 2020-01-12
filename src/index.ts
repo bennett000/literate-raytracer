@@ -230,7 +230,7 @@ const g_userControllableState = {
 
 // on each frame...
 const animate = (time: number) => {
-    const { aa, isAnimating, shadingModel } = g_userControllableState;
+    const { isAnimating } = g_userControllableState;
     // if we're not animating bail, the consumer will need to restart
     if (isAnimating === false) {
         return;
@@ -303,9 +303,6 @@ const animate = (time: number) => {
 
         g_glState.uniforms.spheres[i].point(sphere.point);
     });
-
-    g_glState.uniforms.shadingModel(shadingModel);
-    g_glState.uniforms.aa(aa);
 
     draw(g_glState.gl, g_glState.ctx, g_canvas);
     requestAnimationFrame(animate);

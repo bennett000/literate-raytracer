@@ -238,10 +238,6 @@ function draw(gl: WebGLRenderingContext, context: ProgramContext, canvas: HTMLCa
 function getUniformDescription(shaderConfig: ConfigShader): UniformDescription[] {
   return [
     {
-      name: 'aa',
-      type: 'int',
-    },
-    {
       name: 'aspectRatio',
       type: 'float',
     },
@@ -254,20 +250,12 @@ function getUniformDescription(shaderConfig: ConfigShader): UniformDescription[]
       type: 'vec3',
     },
     {
-      name: 'globalAmbientIntensity',
-      type: 'float',
-    },
-    {
       name: 'height',
       type: 'float',
     },
     {
       name: 'scale',
       type: 'float',
-    },
-    {
-      name: 'shadingModel',
-      type: 'int',
     },
     {
       name: 'width',
@@ -291,10 +279,10 @@ function getUniformDescription(shaderConfig: ConfigShader): UniformDescription[]
           name: 'isTranslucent',
           type: 'int',
         },
-        {
-          name: 'refraction',
-          type: 'float',
-        },
+        // {
+        //   name: 'refraction',
+        //   type: 'float',
+        // },
         {
           name: 'specularOrMetallic',
           type: 'float',

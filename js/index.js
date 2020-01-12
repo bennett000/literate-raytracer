@@ -551,10 +551,6 @@ function draw(gl, context, canvas) {
 function getUniformDescription(shaderConfig) {
     return [
         {
-            name: 'aa',
-            type: 'int',
-        },
-        {
             name: 'aspectRatio',
             type: 'float',
         },
@@ -567,20 +563,12 @@ function getUniformDescription(shaderConfig) {
             type: 'vec3',
         },
         {
-            name: 'globalAmbientIntensity',
-            type: 'float',
-        },
-        {
             name: 'height',
             type: 'float',
         },
         {
             name: 'scale',
             type: 'float',
-        },
-        {
-            name: 'shadingModel',
-            type: 'int',
         },
         {
             name: 'width',
@@ -604,10 +592,10 @@ function getUniformDescription(shaderConfig) {
                     name: 'isTranslucent',
                     type: 'int',
                 },
-                {
-                    name: 'refraction',
-                    type: 'float',
-                },
+                // {
+                //   name: 'refraction',
+                //   type: 'float',
+                // },
                 {
                     name: 'specularOrMetallic',
                     type: 'float',
@@ -1047,7 +1035,7 @@ const g_userControllableState = {
 // start the animation by default
 // on each frame...
 const animate = (time) => {
-    const { aa, isAnimating, shadingModel } = g_userControllableState;
+    const { isAnimating } = g_userControllableState;
     // if we're not animating bail, the consumer will need to restart
     if (isAnimating === false) {
         return;
@@ -1108,8 +1096,6 @@ const animate = (time) => {
         }
         g_glState.uniforms.spheres[i].point(sphere.point);
     });
-    g_glState.uniforms.shadingModel(shadingModel);
-    g_glState.uniforms.aa(aa);
     draw(g_glState.gl, g_glState.ctx, g_canvas);
     requestAnimationFrame(animate);
 };
@@ -1946,8 +1932,6 @@ function getScene(sphereCount = 57, minOrbit = 3) {
             rotation: [0, 0, 0],
             up: [0, 1, 0],
         },
-        // in the BlinnPhong model we'll have a hard coded ambient lighting intensity
-        globalAmbientIntensity: 0.002,
         // for simplicity our lights are just a single point in space
         lights: [[-25, 30, 10], [0, 3, 0]],
         // place the materials object in the scene
@@ -2040,17 +2024,16 @@ function setupScene(gl, context, scene, shaderConfig) {
     u.aspectRatio(aspectRatio);
     u.cameraMatrix(cameraMatrix);
     u.cameraPos(origin);
-    u.globalAmbientIntensity(scene.globalAmbientIntensity);
     u.height(height);
     u.scale(scale);
     u.width(width);
-    u.aa(0);
+    console.log(u);
     materials.forEach((m, i) => {
         u.materials[i].colourOrAlbedo(m.colour);
         u.materials[i].ambient(m.ambient);
         u.materials[i].diffuseOrRoughness(m.diffuse);
         u.materials[i].specularOrMetallic(m.specular);
-        u.materials[i].refraction(m.refraction);
+        // u.materials[i].refraction(m.refraction);
         u.materials[i].isTranslucent(m.isTranslucent);
     });
     spheres.forEach((s, i) => {
@@ -2084,6 +2067,8 @@ function getShaderConfiguration(scene) {
     // We're doing this to stop WebGL from complaining that `1` is not a float
     // this version of GLSL will want a full `1.0`
     return {
+        // anti aliasing, 1, 2, or 4
+        aa: 1,
         // acceleration config
         acceleration: {
             // how many "plane set normals" will we have (note we have no plans for this _not_
@@ -2115,11 +2100,512 @@ function getShaderConfiguration(scene) {
         // that helps us control specular (shiny) lighting
         // it's a string
         phongSpecularExp: '32.0',
+        // the shading model we'll be using
+        // 1 for Blinn Phong, 0 for PBR
+        shadingModel: 0,
         // how many spheres are in the scene?
         sphereCount: scene.spheres.length,
         // how many triangles are in the scene?
         triangleCount: scene.triangles.length,
     };
+}
+function getFragmentShaderMain(aa) {
+    return `
+` +
+        //
+        // <a name="fragmentMain"></a>
+        // #### Fragment Main
+        //
+        // Like the vector shader, the fragment shader also has to have a main function
+        // in the fragment shader, our requirement is to set `gl_FragColor`.  `gl_FragColor` is
+        // a `vec4` r/g/b/a
+        //
+        // we'll also initialize any constant arrays we have
+        `
+void main() {
+  initPlaneSetNormals();
+` +
+        // next we'll pick an anti-aliasing mode
+        (aa === 4 ? mainBody4x() : (aa === 2 ? mainBody2x() : mainBody1x())) +
+        `
+}
+`;
+}
+function mainBody1x() {
+    return '  gl_FragColor = vec4(primaryRay(0.5, 0.5).rgb, 1.0);';
+}
+function mainBody2x() {
+    return `
+  vec3 total = vec3(0.0);
+
+  total += primaryRay(0.25, 0.25).rgb;
+  total += primaryRay(0.75, 0.75).rgb;
+
+  gl_FragColor = vec4(total.rgb / 2.0, 1.0);
+`;
+}
+function mainBody4x() {
+    return `
+  vec3 total = vec3(0.0);
+
+  total += primaryRay(0.25, 0.25).rgb;
+  total += primaryRay(0.75, 0.25).rgb;
+  total += primaryRay(0.75, 0.75).rgb;
+  total += primaryRay(0.25, 0.75).rgb;
+
+  gl_FragColor = vec4(total.rgb / 4.0, 1.0);
+`;
+}
+function getShaderPbrDeclarations() {
+    return `
+
+float DistributionGGX(vec3 N, vec3 H, float roughness);
+float GeometrySchlickGGX(float NdotV, float roughness);
+float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness);
+vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness);
+vec3 surface1(Hit hit);
+vec3 surface2(Hit hit);
+
+`;
+}
+function getShaderPbr(defaultF0, lightCount) {
+    // PBR Computations
+    // essentially straight from [Learn OpenGL](https://learnopengl.com/PBR/Theory "Learn OpenGL`")
+    return ` 
+` +
+        `
+vec3 surfacePbrReflectance(Hit hit, vec3 N, vec3 V, vec3 R, vec3 reflectColour, vec3 refractColour) {
+    Material material = hit.material;
+    vec3 albedo = sRgb8ToLinear(material.colourOrAlbedo); // pow(material.colourOrAlbedo.rgb, vec3(2.2));
+    float ao = material.ambient;
+    float metallic = material.specularOrMetallic;
+    float roughness = material.diffuseOrRoughness;
+
+    vec3 F0 = vec3(${defaultF0}); 
+    F0 = mix(F0, albedo, metallic);
+
+    // reflectance equation
+    bool didLight = false;
+    vec3 Lo = vec3(0.0);
+    for (int i = 0; i < ${lightCount}; i += 1) {
+        if (isLightVisible(hit.position, pointLights[i].point, hit.normal) == true) {
+            didLight = true;
+            // calculate per-light radiance
+            vec3 lightDir = pointLights[i].point - hit.position;
+            float distance = length(lightDir);
+            vec3 L = normalize(lightDir);
+            vec3 H = normalize(V + L);
+            float attenuation = 1.0 / (distance * distance);
+            // @todo light colour
+            vec3 lightColour = sRgb8ToLinear(vec3(255.0, 255.0, 255.0) * 35.0);
+            vec3 radiance = lightColour.rgb * attenuation;
+
+            // Cook-Torrance BRDF
+            float NDF = DistributionGGX(N, H, roughness);   
+            float G   = GeometrySmith(N, V, L, roughness);      
+            vec3 F    = fresnelSchlickRoughness(max(dot(H, V), 0.0), F0, roughness);
+
+            vec3 nominator    = NDF * G * F; 
+            float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.001; // 0.001 to prevent divide by zero.
+            /** @todo use real physics, this violates the PBR to some extent */
+            vec3 specular = nominator / denominator + F * reflectColour * metallic;
+
+            // kS is equal to Fresnel
+            vec3 kS = F;
+            // for energy conservation, the diffuse and specular light can't
+            // be above 1.0 (unless the surface emits light); to preserve this
+            // relationship the diffuse component (kD) should equal 1.0 - kS.
+            vec3 kD = vec3(1.0) - kS;
+            // multiply kD by the inverse metalness such that only non-metals 
+            // have diffuse lighting, or a linear blend if partly metal (pure metals
+            // have no diffuse light).
+            kD *= 1.0 - metallic;	  
+            // scale light by NdotL
+            float NdotL = max(dot(N, L), 0.0);        
+
+            // add to outgoing radiance Lo
+            Lo += (kD * (albedo + refractColour) / PI + specular) * radiance * NdotL;  // note that we already multiplied the BRDF by the Fresnel (kS) so we won't multiply by kS again
+        }
+    }
+
+    if (didLight == false) {
+        return vec3(0.0, 0.0, 0.0);
+    }
+
+    // ambient lighting (will replace this ambient lighting with 
+    // environment lighting).
+    vec3 ambient = vec3(0.03) * albedo * ao;
+
+    vec3 colour = ambient + Lo;
+
+
+    // HDR tonemapping
+    colour = colour / (colour + vec3(1.0));
+
+    colour = linearToSrgbF(colour);
+
+    return colour;
+}
+` +
+        // PBR Surface functions
+        `
+vec3 surface1(Hit hit) {
+    vec3 N = hit.normal;
+    vec3 V = normalize(hit.ray.point - hit.position);
+    vec3 R = reflect(-V, N);  
+    vec3 reflectColour = cast2(Ray(hit.position, R, hit.ray.ior)).rgb;
+    vec3 refractColour = vec3(0.0, 0.0, 0.0);
+
+    if (hit.material.isTranslucent == 1) {
+        if (areEqualish(hit.ray.ior, hit.material.refraction) == false) {
+        }
+    }
+
+    return surfacePbrReflectance(hit, N, V, R, reflectColour, refractColour);
+}
+
+vec3 surface2(Hit hit) {
+    vec3 N = hit.normal;
+    vec3 V = normalize(hit.ray.point - hit.position);
+    vec3 R = reflect(-V, N);   
+
+    return surfacePbrReflectance(hit, N, V, R, vec3(1.0, 1.0, 1.0), vec3(0.0, 0.0, 0.0));
+}
+` +
+        `
+
+float DistributionGGX(vec3 N, vec3 H, float roughness) {
+    float a = roughness*roughness;
+    float a2 = a*a;
+    float NdotH = max(dot(N, H), 0.0);
+    float NdotH2 = NdotH*NdotH;
+
+    float nom   = a2;
+    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+    denom = PI * denom * denom;
+
+    return nom / denom;
+}
+
+float GeometrySchlickGGX(float NdotV, float roughness) {
+    float r = (roughness + 1.0);
+    float k = (r*r) / 8.0;
+
+    float nom   = NdotV;
+    float denom = NdotV * (1.0 - k) + k;
+
+    return nom / denom;
+}
+
+float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
+    float NdotV = max(dot(N, V), 0.0);
+    float NdotL = max(dot(N, L), 0.0);
+    float ggx2 = GeometrySchlickGGX(NdotV, roughness);
+    float ggx1 = GeometrySchlickGGX(NdotL, roughness);
+
+    return ggx1 * ggx2;
+}
+
+vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
+    return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(1.0 - cosTheta, 5.0);
+}   
+`;
+}
+function getShaderPhongDeclarations() {
+    return `
+vec3 surface1(Hit hit);
+vec3 surface2(Hit hit);
+`;
+}
+function getShaderPhong(phongSpecularExp, lightCount) {
+    return `
+` +
+        // Blinn Phong functions
+        `
+vec3 surface1(Hit hit) {
+    Material material = hit.material;
+    vec3 fullColour = vec3(material.colourOrAlbedo.rgb / 255.0);
+    vec3 diffuse = vec3(0.0, 0.0, 0.0);
+    vec3 specular = vec3(0.0, 0.0, 0.0);
+
+    for (int i = 0; i < ${lightCount}; i += 1) {
+        if (isLightVisible(hit.position, pointLights[i].point, hit.normal) == true) {
+            // @todo light colour
+            vec3 lightColour = vec3(1.0, 1.0, 1.0);
+            vec3 lightDir = normalize(pointLights[i].point - hit.position);
+            float lightIntensity = 1.0;
+
+            // diffuse
+            float dco = dot(hit.normal, lightDir);
+            if (dco < 0.0) { dco = 0.0; }
+
+            diffuse += vec3(fullColour.rgb * lightIntensity * dco);
+
+            // specular
+            vec3 halfway = normalize(lightDir - hit.ray.vector);
+            float sco = dot(hit.normal, normalize(halfway));
+            if (sco < 0.0) { sco = 0.0; }
+            
+            specular += vec3(lightColour.rgb * lightIntensity * pow(sco, ${phongSpecularExp}));
+        }
+    }
+
+    // calculate ambient light
+    vec3 ambient = fullColour.rgb;
+    ambient = vec3(ambient.rgb + (fullColour.rgb * material.ambient));
+
+    return ambient.rgb + diffuse.rgb * material.diffuseOrRoughness + specular.rgb * material.specularOrMetallic;
+}
+
+vec3 surface2(Hit hit) {
+    Material material = hit.material;
+    vec3 fullColour = vec3(material.colourOrAlbedo.rgb / 255.0);
+    vec3 diffuse = vec3(0.0, 0.0, 0.0);
+    vec3 specular = vec3(0.0, 0.0, 0.0);
+
+    for (int i = 0; i < ${lightCount}; i += 1) {
+        if (isLightVisible(hit.position, pointLights[i].point, hit.normal) == true) {
+            // @todo light colour
+            vec3 lightColour = vec3(1.0, 1.0, 1.0);
+            vec3 lightDir = normalize(pointLights[i].point - hit.position);
+            float lightIntensity = 1.0;
+
+            // diffuse
+            float dco = dot(hit.normal, lightDir);
+            if (dco < 0.0) { dco = 0.0; }
+
+            diffuse += vec3(fullColour.rgb * lightIntensity * dco);
+
+            // specular
+            vec3 halfway = normalize(lightDir - hit.ray.vector);
+            float sco = dot(hit.normal, normalize(halfway));
+            if (sco < 0.0) { sco = 0.0; }
+            
+            specular += vec3(lightColour.rgb * lightIntensity * pow(sco, ${phongSpecularExp}));
+        }
+    }
+
+    // calculate ambient light
+    vec3 ambient = fullColour.rgb;
+    ambient = vec3(ambient.rgb + (fullColour.rgb * material.ambient));
+
+    return ambient.rgb + diffuse.rgb * material.diffuseOrRoughness + specular.rgb * material.specularOrMetallic;
+}
+
+`;
+}
+function getShaderStructs() {
+    return `
+` +
+        // Every pixel needs to create at least one ray
+        // `Ray`s are just `point`s x/y/z with a direction (`vector`), also x/y/z
+        // `ior` is the "Index of Refraction" in the volume the ray was cast
+        `    
+struct Ray {
+    vec3 point;
+    vec3 vector;
+    float ior;
+};
+` +
+        // `Material`s are a bit of a mess, their "shape" is shared between
+        // JavaScript and GLSL, full descriptions of shape can be found in
+        // [the js scene docs](scene.html#materials)
+        `    
+struct Material {
+    vec3 colourOrAlbedo;
+    float ambient;
+    float diffuseOrRoughness;
+    float specularOrMetallic;
+    float refraction;
+    int isTranslucent;
+};
+` +
+        // `Hit`s describe the intersection of a `Ray` and an object
+        `    
+struct Hit {
+    float distance;
+    Material material;
+    vec3 normal;
+    vec3 position;
+    Ray ray;
+};
+` +
+        // `Sphere`s in our case are mathematical spheres
+        // They are a simple point, a radius, and a pointer to an element in the `materials`
+        // array
+        `    
+struct Sphere {
+    vec3 point;
+    float radius;
+    int material;
+};
+` +
+        // `SphereDistance` lets us return a `Sphere` and how far we are from it
+        `    
+struct SphereDistance {
+    float distance;
+    Sphere sphere;
+};
+` +
+        // `Triangle`s share a "shape" with JavaScript and are [documented here](scene.html#triangles)
+        `   
+struct Triangle {
+    vec3 a;
+    vec3 b;
+    vec3 c;
+    vec3 normal;
+    int material;
+};
+` +
+        // `TriangleDistance` lets us return a `Triangle`, how far we are from it, the
+        // point at which our ray intersected the triangle, and "barycentric" coordinates
+        // `u` and `v` for future texturing
+        `    
+struct TriangleDistance {
+    float distance;
+    Triangle triangle;
+    vec3 intersectPoint;
+    float u;
+    float v;
+};
+` +
+        // `ExtentsIntersect` describe the intersection of a ray with an extents boundary
+        `
+struct ExtentsIntersect {
+    float tNear;
+    float tFar;
+    int planeIndex;
+};
+` +
+        // `TextureDataStructure` describes the most basic information about how a texture is 
+        // encoded `length` is the number of records and `size` is the number of vec4 (RGBA)
+        // blocks in each record
+        `
+struct TextureDataStructure {
+    int length;
+    int size;
+};
+` +
+        // `PointLight` is a wrapper around a `point`, lights will have colours in the future
+        `
+struct PointLight {
+    vec3 point;
+};
+` +
+        `
+`;
+}
+function getShaderUtilityDeclarations() {
+    return `
+bool areEqualish(float a, float b);
+vec2 indexToCoord(int index, float len);
+float fourByteToFloat(vec4 value, bool isUnsigned);
+float sRgb8ChannelToLinear(float colour8);
+vec3 sRgb8ToLinear(vec3 srgb8);
+float linearChannelToSrgbF(float linear);
+vec3 linearToSrgbF(vec3 linear);
+vec3 sphereNormal(Sphere sphere, vec3 pos);
+
+`;
+}
+function getShaderUtility(epsilon) {
+    return `
+` +
+        // are two floating points roughly equal?
+        `
+bool areEqualish(float a, float b) {
+    if (abs(a - b) < ${epsilon}) {
+        return true;
+    }
+    return false;
+}
+` +
+        // we will need a function that can get random data out of textures
+        `
+vec2 indexToCoord(int index, float len) {
+    return vec2(
+        (float(index + 0) + 0.5) / len,
+        0.0
+    );
+}
+
+` +
+        // we need a function to convert encoded floats back to floats
+        // this is interesting as JS converts to RGBA unsigned integers, then
+        // GL converts those to 0.0-1.0 range, then we convert that back to integers
+        // and finally back to floats 
+        `
+float fourByteToFloat(vec4 value, bool isUnsigned) {
+    /** NOTE also converts from float percentages of 255 to "whole" numbers */
+    float sign;
+    float bigEndOrZero;
+    float bigEnd;
+
+    if (isUnsigned == true) {
+        return float(value.r * 255.0 * 256.0 * 256.0 * 256.0 + 
+                    value.g * 255.0 * 256.0 * 256.0 +
+                    value.b * 255.0 * 256.0 +
+                    value.a * 255.0);
+    } else {
+        sign = value.r * 255.0 > 127.0 ? -1.0 : 1.0; 
+        bigEndOrZero = value.r * 255.0 == 255.0 ? 0.0 : value.r;
+        bigEnd = bigEndOrZero > 127.0 ? bigEndOrZero - 127.0 : bigEndOrZero;
+
+        return sign * (
+        bigEnd * 255.0 * 256.0 * 256.0 * 256.0 +
+        value.g * 255.0 * 256.0 * 256.0 +
+        value.b * 255.0 * 256.0 +
+        value.a * 255.0
+        );
+    }
+}
+` +
+        // colour space conversion functions
+        `
+float sRgb8ChannelToLinear(float colour8) {
+    const float sThresh = 0.04045;
+
+    float colourf = colour8 / 255.0;
+    if (colourf <= sThresh) {
+        return colourf / 12.92;
+    }
+
+    return pow((colourf + 0.055) / 1.055, 2.4);
+}
+
+vec3 sRgb8ToLinear(vec3 srgb8) {
+    return vec3(
+        sRgb8ChannelToLinear(srgb8.r),
+        sRgb8ChannelToLinear(srgb8.g),
+        sRgb8ChannelToLinear(srgb8.b)
+        );
+}
+
+float linearChannelToSrgbF(float linear) {
+    if (linear <= 0.0031308) {
+        return (linear * 12.92);
+    }
+
+    return (1.055 * pow(linear, 1.0/2.4) - 0.055);
+}
+
+vec3 linearToSrgbF(vec3 linear) {
+    return vec3(
+        linearChannelToSrgbF(linear.r),
+        linearChannelToSrgbF(linear.g),
+        linearChannelToSrgbF(linear.b)
+    );
+}
+
+` +
+        // compute the normal of a sphere
+        `
+vec3 sphereNormal(Sphere sphere, vec3 pos) {
+    return normalize(pos - sphere.point);
+}
+` +
+        `
+`;
 }
 // ## Shader
 // Shaders are programs that run on the GPU.  In OpenGL and specifically WebGL
@@ -2171,135 +2657,37 @@ function getVertexSource() {
 // each pixel
 function getFragmentSource(config) {
     // for brevity's sake break out the config values
-    const { acceleration, bg, defaultF0, epsilon, infinity, lightCount, materialCount, phongSpecularExp, sphereCount, triangleCount, } = config;
+    const { aa, acceleration, bg, defaultF0, epsilon, infinity, lightCount, materialCount, phongSpecularExp, shadingModel, sphereCount, triangleCount, } = config;
+    let shadingFragment;
+    let shadingDeclarations;
+    if (shadingModel === 0) {
+        shadingDeclarations = getShaderPbrDeclarations();
+        shadingFragment = getShaderPbr(defaultF0, lightCount);
+    }
+    else {
+        shadingDeclarations = getShaderPhongDeclarations();
+        shadingFragment = getShaderPhong(phongSpecularExp, lightCount);
+    }
     // Then we'll get into the source
     // we start by telling WebGL what level of precision we require with floats
     // we could probably get away with highp but mediump is more universally supported
     return `precision mediump float; ` +
-        // Every pixel needs to create at least one ray
-        // `Ray`s are just `point`s x/y/z with a direction (`vector`), also x/y/z
-        // `ior` is the "Index of Refraction" in the volume the ray was cast
-        `    
-    struct Ray {
-        vec3 point;
-        vec3 vector;
-        float ior;
-    };
-` +
-        // `Material`s are a bit of a mess, their "shape" is shared between
-        // JavaScript and GLSL, full descriptions of shape can be found in
-        // [the js scene docs](scene.html#materials)
-        `    
-    struct Material {
-        vec3 colourOrAlbedo;
-        float ambient;
-        float diffuseOrRoughness;
-        float specularOrMetallic;
-        float refraction;
-        int isTranslucent;
-    };
-` +
-        // `Hit`s describe the intersection of a `Ray` and an object
-        `    
-    struct Hit {
-        float distance;
-        Material material;
-        vec3 normal;
-        vec3 position;
-        Ray ray;
-    };
-` +
-        // `Sphere`s in our case are mathematical spheres
-        // They are a simple point, a radius, and a pointer to an element in the `materials`
-        // array
-        `    
-    struct Sphere {
-        vec3 point;
-        float radius;
-        int material;
-    };
-` +
-        // `SphereDistance` lets us return a `Sphere` and how far we are from it
-        `    
-    struct SphereDistance {
-        float distance;
-        Sphere sphere;
-    };
-` +
-        // `Triangle`s share a "shape" with JavaScript and are [documented here](scene.html#triangles)
-        `   
-    struct Triangle {
-        vec3 a;
-        vec3 b;
-        vec3 c;
-        vec3 normal;
-        int material;
-    };
-` +
-        // `TriangleDistance` lets us return a `Triangle`, how far we are from it, the
-        // point at which our ray intersected the triangle, and "barycentric" coordinates
-        // `u` and `v` for future texturing
-        `    
-    struct TriangleDistance {
-        float distance;
-        Triangle triangle;
-        vec3 intersectPoint;
-        float u;
-        float v;
-    };
-` +
-        // `ExtentsIntersect` describe the intersection of a ray with an extents boundary
-        `
-    struct ExtentsIntersect {
-        float tNear;
-        float tFar;
-        int planeIndex;
-    };
-` +
-        // `TextureDataStructure` describes the most basic information about how a texture is 
-        // encoded `length` is the number of records and `size` is the number of vec4 (RGBA)
-        // blocks in each record
-        `
-    struct TextureDataStructure {
-        int length;
-        int size;
-    };
-` +
-        // `PointLight` is a wrapper around a `point`, lights will have colours in the future
-        `
-    struct PointLight {
-        vec3 point;
-    };
-` +
+        // we should load up our structs
+        getShaderStructs() +
         // we have a few constants, `bg`, the background colour is configurable
         `
-    const vec3 bgColour = vec3(${bg.r}, ${bg.g}, ${bg.b});
-    const float PI = ${Math.PI};
-    const float refractionMedium = 1.0;
+const vec3 bgColour = vec3(${bg.r}, ${bg.g}, ${bg.b});
+const float PI = ${Math.PI};
+const float refractionMedium = 1.0;
 ` +
         // uniforms are values uploaded by javascript, there are a few essentialls here
         `
-    uniform float aspectRatio;
-    uniform vec3 cameraPos;
-    uniform mat4 cameraMatrix;
-    uniform float globalAmbientIntensity;
-    uniform float height;
-    uniform float scale;
-    uniform float width;
-` +
-        // For now we'll also use some uniforms to select rending options
-        // in a performant app we'd want to dnyamically generate faster shaders
-        // that can skip this check and have the models baked in
-        //
-        // for now let's set them up here
-        //
-        // 0 for Blinn Phong, 1 for PBR
-        `
-    uniform int shadingModel;
-` +
-        // anti-aliasing amount 0 - none, 2 - some, 4, reasonable but 4x the work
-        `
-    uniform int aa;
+uniform float aspectRatio;
+uniform vec3 cameraPos;
+uniform mat4 cameraMatrix;
+uniform float height;
+uniform float scale;
+uniform float width;
 ` +
         // we have a few "look up" tables here
         // GLSL arrays in this version aren't so much random access chunks of memory
@@ -2312,96 +2700,49 @@ function getFragmentSource(config) {
         //
         //
         `
-    uniform Material materials[${materialCount}];
-    uniform Sphere spheres[${sphereCount}];
-    uniform PointLight pointLights[${lightCount}];
-    uniform sampler2D trianglesData;
-    uniform TextureDataStructure triangles;
+uniform Material materials[${materialCount}];
+uniform Sphere spheres[${sphereCount}];
+uniform PointLight pointLights[${lightCount}];
+
+uniform sampler2D trianglesData;
+uniform TextureDataStructure triangles;
 ` +
         // in GLSL if you want to call your functions "out of the order their written" you'll
         // need to declare them upfront
         `
-    float sphereIntersection(Sphere sphere, Ray ray);
-    TriangleDistance triangleIntersection(Triangle triangle, Ray ray);
-    SphereDistance intersectSpheres(Ray ray, bool useAnyHit);
-    TriangleDistance intersectTriangles(Ray ray, bool useAnyHit);
-    vec3 cast1(Ray ray);
-    vec3 cast2(Ray ray);
-    vec3 cast3(Ray ray);
-    vec3 sphereNormal(Sphere sphere, vec3 pos);
-    vec3 surfacePhong(Hit hit);
-    vec3 surfacePbr1(Hit hit);
-    vec3 surfacePbr2(Hit hit);
-    bool isLightVisible(vec3 pt, vec3 light, vec3 normal);
-    bool areEqualish(float a, float b);
-    vec3 primaryRay(float xo, float yo);
-    float DistributionGGX(vec3 N, vec3 H, float roughness);
-    float GeometrySchlickGGX(float NdotV, float roughness);
-    float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness);
-    vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness);
-    Material getMaterial(int index);
-    Triangle getTriangle(int index);
-    float fourByteToFloat(vec4 value, bool isUnsigned);
+float sphereIntersection(Sphere sphere, Ray ray);
+TriangleDistance triangleIntersection(Triangle triangle, Ray ray);
+SphereDistance intersectSpheres(Ray ray, bool useAnyHit);
+TriangleDistance intersectTriangles(Ray ray, bool useAnyHit);
+vec3 cast1(Ray ray);
+vec3 cast2(Ray ray);
+vec3 cast3(Ray ray);
+bool isLightVisible(vec3 pt, vec3 light, vec3 normal);
+vec3 primaryRay(float xo, float yo);
+Material getMaterial(int index);
+Triangle getTriangle(int index);
 ` +
+        getShaderUtilityDeclarations() +
+        shadingDeclarations +
         // acceleration data structure requirements
         `
-    vec3 planeSetNormals[${acceleration.numPlaneSetNormals}];
-    
-    void initPlaneSetNormals() {
-      planeSetNormals[0] = vec3(1.0, 0.0, 0.0);
-      planeSetNormals[1] = vec3(0.0, 1.0, 0.0); 
-      planeSetNormals[2] = vec3(0.0, 0.0, 1.0); 
-      planeSetNormals[3] = vec3( sqrt(3.0) / 3.0,  sqrt(3.0) / 3.0, sqrt(3.0) / 3.0); 
-      planeSetNormals[4] = vec3(-sqrt(3.0) / 3.0,  sqrt(3.0) / 3.0, sqrt(3.0) / 3.0); 
-      planeSetNormals[5] = vec3(-sqrt(3.0) / 3.0, -sqrt(3.0) / 3.0, sqrt(3.0) / 3.0); 
-      planeSetNormals[6] = vec3( sqrt(3.0) / 3.0, -sqrt(3.0) / 3.0, sqrt(3.0) / 3.0);
-    }
-` +
-        //
-        // <a name="fragmentMain"></a>
-        // #### Fragment Main
-        //
-        // Like the vector shader, the fragment shader also has to have a main function
-        // in the fragment shader, our requirement is to set `gl_FragColor`.  `gl_FragColor` is
-        // a `vec4` r/g/b/a
-        //
-        // we'll also initialize any constant arrays we have
-        `    void main() {
-      initPlaneSetNormals();
-` +
-        // we'll support casting 2, 4, or 1 rays from the camera to _this_ pixel
-        // the more rays the better the anti-aliasing.  That said these values literally
-        // multiply the cost of the function per pixel, so 4xAA 1080P mean `1920 * 1080 * 4`
-        // primary rays!
-        `
-        vec3 total = vec3(0.0);
-` +
-        // we need to average the colours at the end of this, and we'll use this divisor to do it
-        `
-        float divisor = 1.0;
+vec3 planeSetNormals[${acceleration.numPlaneSetNormals}];
 
-        if (aa == 2) {
-            divisor = 2.0;
-            total += primaryRay(0.25, 0.25).rgb;
-            total += primaryRay(0.75, 0.75).rgb;
-        } else if (aa == 4) {
-            divisor = 4.0;
-            total += primaryRay(0.25, 0.25).rgb;
-            total += primaryRay(0.75, 0.25).rgb;
-            total += primaryRay(0.75, 0.75).rgb;
-            total += primaryRay(0.25, 0.75).rgb;
-        } else {
-            total += primaryRay(0.5, 0.5).rgb;
-        }
-
+void initPlaneSetNormals() {
+    planeSetNormals[0] = vec3(1.0, 0.0, 0.0);
+    planeSetNormals[1] = vec3(0.0, 1.0, 0.0); 
+    planeSetNormals[2] = vec3(0.0, 0.0, 1.0); 
+    planeSetNormals[3] = vec3( sqrt(3.0) / 3.0,  sqrt(3.0) / 3.0, sqrt(3.0) / 3.0); 
+    planeSetNormals[4] = vec3(-sqrt(3.0) / 3.0,  sqrt(3.0) / 3.0, sqrt(3.0) / 3.0); 
+    planeSetNormals[5] = vec3(-sqrt(3.0) / 3.0, -sqrt(3.0) / 3.0, sqrt(3.0) / 3.0); 
+    planeSetNormals[6] = vec3( sqrt(3.0) / 3.0, -sqrt(3.0) / 3.0, sqrt(3.0) / 3.0);
+}
 ` +
-        // finally we set `gl_FragColor`, averaging the rays we cast
-        // we hard code the alpha value to `1.0` as we'll be doing
-        // translucency differently
-        `
-        gl_FragColor = vec4(total.rgb / divisor, 1.0);
-    }
-` +
+        // customize the main function
+        getFragmentShaderMain(aa) +
+        // add the shading functions
+        shadingFragment +
+        getShaderUtility(epsilon) +
         //
         // <a name="primaryRay"></a>
         // #### primaryRay
@@ -2409,23 +2750,23 @@ function getFragmentSource(config) {
         // the primaryRay function computes the primary ray from the pinhole camera location
         // to the _portion of the pixel_ specified by `xo` and `yo`
         `
-    vec3 primaryRay(float xo, float yo) {
-        float px = gl_FragCoord.x;
-        float py = gl_FragCoord.y;
+vec3 primaryRay(float xo, float yo) {
+    float px = gl_FragCoord.x;
+    float py = gl_FragCoord.y;
 
-        float x = (2.0 * (px + xo) / width - 1.0) * scale;
-        float y = (2.0 * (py + yo) / height - 1.0) * scale * 1.0 / aspectRatio;
+    float x = (2.0 * (px + xo) / width - 1.0) * scale;
+    float y = (2.0 * (py + yo) / height - 1.0) * scale * 1.0 / aspectRatio;
 
-        vec3 dir = vec3(0.0, 0.0, 0.0);
+    vec3 dir = vec3(0.0, 0.0, 0.0);
 
-        dir.x = x    * cameraMatrix[0][0] + y * cameraMatrix[1][0] + -1.0 * cameraMatrix[2][0];
-        dir.y = y    * cameraMatrix[0][1] + y * cameraMatrix[1][1] + -1.0 * cameraMatrix[2][1];
-        dir.z = -1.0 * cameraMatrix[0][2] + y * cameraMatrix[1][2] + -1.0 * cameraMatrix[2][2];
+    dir.x = x    * cameraMatrix[0][0] + y * cameraMatrix[1][0] + -1.0 * cameraMatrix[2][0];
+    dir.y = y    * cameraMatrix[0][1] + y * cameraMatrix[1][1] + -1.0 * cameraMatrix[2][1];
+    dir.z = -1.0 * cameraMatrix[0][2] + y * cameraMatrix[1][2] + -1.0 * cameraMatrix[2][2];
 
-        Ray ray = Ray(cameraPos, normalize(dir), refractionMedium);
+    Ray ray = Ray(cameraPos, normalize(dir), refractionMedium);
 
-        return cast1(ray);
-    }
+    return cast1(ray);
+}
 ` +
         //
         // <a name="trace"></a>
@@ -2434,44 +2775,21 @@ function getFragmentSource(config) {
         // the trace function checks if a ray intersects _any_ spheres _or_ triangles
         // in the scene.  In the future it's ripe for "acceleration"
         `
-    Hit trace(Ray ray) {
-       SphereDistance sd = intersectSpheres(ray, false);
-       TriangleDistance td = intersectTriangles(ray, false);
-       if (sd.distance <= 0.0 && td.distance <= 0.0) {
-           return Hit(
-               -1.0,
-               Material(vec3(0.0, 0.0, 0.0), 0.0, 0.0, 0.0, 0.0, 0),
-               vec3(0.0, 0.0, 0.0),
-               vec3(0.0, 0.0, 0.0),
-               ray
-           );
-       }
+Hit trace(Ray ray) {
+    SphereDistance sd = intersectSpheres(ray, false);
+    TriangleDistance td = intersectTriangles(ray, false);
+    if (sd.distance <= 0.0 && td.distance <= 0.0) {
+        return Hit(
+            -1.0,
+            Material(vec3(0.0, 0.0, 0.0), 0.0, 0.0, 0.0, 0.0, 0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            ray
+        );
+    }
 
-       if (sd.distance >= 0.0 && td.distance >= 0.0) {
-           if (sd.distance < td.distance) {
-            vec3 pointAtTime = ray.point + vec3(ray.vector.xyz * sd.distance);
-            vec3 normal = sphereNormal(sd.sphere, pointAtTime);
-
-            return Hit(
-                sd.distance,
-                getMaterial(sd.sphere.material),
-                normal,
-                sd.sphere.point,
-                ray
-            );
-           } else {
-            return Hit(
-                td.distance,
-                getMaterial(td.triangle.material),
-                td.triangle.normal,
-                td.intersectPoint,
-                ray
-            );
-           }
-       }
-
-
-       if (sd.distance >= 0.0) {
+    if (sd.distance >= 0.0 && td.distance >= 0.0) {
+        if (sd.distance < td.distance) {
         vec3 pointAtTime = ray.point + vec3(ray.vector.xyz * sd.distance);
         vec3 normal = sphereNormal(sd.sphere, pointAtTime);
 
@@ -2482,16 +2800,39 @@ function getFragmentSource(config) {
             sd.sphere.point,
             ray
         );
-       }
-
-       return Hit(
+        } else {
+        return Hit(
             td.distance,
             getMaterial(td.triangle.material),
             td.triangle.normal,
             td.intersectPoint,
             ray
         );
+        }
     }
+
+
+    if (sd.distance >= 0.0) {
+    vec3 pointAtTime = ray.point + vec3(ray.vector.xyz * sd.distance);
+    vec3 normal = sphereNormal(sd.sphere, pointAtTime);
+
+    return Hit(
+        sd.distance,
+        getMaterial(sd.sphere.material),
+        normal,
+        sd.sphere.point,
+        ray
+    );
+    }
+
+    return Hit(
+        td.distance,
+        getMaterial(td.triangle.material),
+        td.triangle.normal,
+        td.intersectPoint,
+        ray
+    );
+}
 ` +
         // the `castX` functions cast rays and call a surface function to
         // get the colour
@@ -2499,529 +2840,247 @@ function getFragmentSource(config) {
         // right now they're a mess in that they are being hard code toggled
         // to produce results
         `
-    vec3 cast1(Ray ray) {
-        Hit hit = trace(ray);
+vec3 cast1(Ray ray) {
+    Hit hit = trace(ray);
 
-        if (hit.distance < 0.0) {
-            return bgColour;
-        }
-
-        if (shadingModel == 0) {
-            return surfacePbr1(hit);
-        } else {
-            return surfacePhong(hit);
-        }
+    if (hit.distance < 0.0) {
+        return bgColour;
     }
 
-    vec3 cast2(Ray ray) {
-        Hit hit = trace(ray);
+    return surface1(hit);
+}
 
-        if (hit.distance < 0.0) {
-            return bgColour;
-        }
+vec3 cast2(Ray ray) {
+    Hit hit = trace(ray);
 
-        if (shadingModel == 0) {
-            return surfacePbr2(hit);
-        } else {
-            return surfacePhong(hit);
-        }
+    if (hit.distance < 0.0) {
+        return bgColour;
     }
 
-    vec3 cast3(Ray ray) {
-        Hit hit = trace(ray);
+    return surface2(hit);
+}
 
-        if (hit.distance < 0.0) {
-            return bgColour;
-        }
+vec3 cast3(Ray ray) {
+    Hit hit = trace(ray);
 
-        return surfacePhong(hit);
+    if (hit.distance < 0.0) {
+        return bgColour;
     }
-` +
-        // compute the normal of a sphere
-        `
-    vec3 sphereNormal(Sphere sphere, vec3 pos) {
-        return normalize(pos - sphere.point);
-    }
+
+    return vec3(1.0, 1.0, 1.0);
+}
 ` +
         // ray spehre intersection iterator
         `
-
-    SphereDistance intersectSpheres(Ray ray, bool useAnyHit) {
-        SphereDistance sd = SphereDistance(-1.0, Sphere(
-            vec3(0.0, 0.0, 0.0), 
-            -1.0,
-            0));
-        for (int i = 0; i < ${sphereCount}; i += 1) {
-            Sphere s = spheres[i];
-            float dist = sphereIntersection(s, ray);
-            if (dist >= 0.0) {
-                // we're temporarily hacking in an object that casts no shadow 
-                Material m = getMaterial(sd.sphere.material);
-                if (sd.distance <= 0.0 || dist < sd.distance) {
-                    if (useAnyHit == false || m.isTranslucent == 0) {
-                        sd.distance = dist;
-                        sd.sphere = s;
-                    }
+SphereDistance intersectSpheres(Ray ray, bool useAnyHit) {
+    SphereDistance sd = SphereDistance(-1.0, Sphere(
+        vec3(0.0, 0.0, 0.0), 
+        -1.0,
+        0));
+    for (int i = 0; i < ${sphereCount}; i += 1) {
+        Sphere s = spheres[i];
+        float dist = sphereIntersection(s, ray);
+        if (dist >= 0.0) {
+            // we're temporarily hacking in an object that casts no shadow 
+            Material m = getMaterial(sd.sphere.material);
+            if (sd.distance <= 0.0 || dist < sd.distance) {
+                if (useAnyHit == false || m.isTranslucent == 0) {
+                    sd.distance = dist;
+                    sd.sphere = s;
                 }
-                if (useAnyHit) {
-                    // we're temporarily hacking in an object that casts no shadow 
-                    if (m.isTranslucent != 0) {
-                        sd.distance = dist;
-                        sd.sphere = s;
-                        return sd;
-                    }
+            }
+            if (useAnyHit) {
+                // we're temporarily hacking in an object that casts no shadow 
+                if (m.isTranslucent != 0) {
+                    sd.distance = dist;
+                    sd.sphere = s;
+                    return sd;
                 }
             }
         }
-        return sd;
     }
+    return sd;
+}
 ` +
         // Ray triangle intersection iterator
         `
-    TriangleDistance intersectTriangles(Ray ray, bool useAnyHit) {
-        TriangleDistance least = TriangleDistance(
-            -1.0, 
-            Triangle(
-                vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), 
-                vec3(0.0, 0.0, 0.0), 
-                0),
-            vec3(0.0, 0.0, 0.0),
-            0.0,
-            0.0);
+TriangleDistance intersectTriangles(Ray ray, bool useAnyHit) {
+    TriangleDistance least = TriangleDistance(
+        -1.0, 
+        Triangle(
+            vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), 
+            vec3(0.0, 0.0, 0.0), 
+            0),
+        vec3(0.0, 0.0, 0.0),
+        0.0,
+        0.0);
 
-        for (int i = 0; i < ${triangleCount}; i += 1) {
-            Triangle t = getTriangle(i);
-            TriangleDistance td = triangleIntersection(t, ray);
-            if (td.distance >= 0.0) {
-                // we're temporarily hacking in an object that casts no shadow 
-                Material m = getMaterial(td.triangle.material);
-                if (least.distance <= 0.0 || td.distance < least.distance) {
-                    if (useAnyHit == false || m.isTranslucent == 0) {
-                        least = td;
-                    }
+    for (int i = 0; i < ${triangleCount}; i += 1) {
+        Triangle t = getTriangle(i);
+        TriangleDistance td = triangleIntersection(t, ray);
+        if (td.distance >= 0.0) {
+            // we're temporarily hacking in an object that casts no shadow 
+            Material m = getMaterial(td.triangle.material);
+            if (least.distance <= 0.0 || td.distance < least.distance) {
+                if (useAnyHit == false || m.isTranslucent == 0) {
+                    least = td;
                 }
-                if (useAnyHit == true) {
-                    // we're temporarily hacking in an object that casts no shadow 
-                    if (m.isTranslucent != 0) {
-                        return td;
-                    }
+            }
+            if (useAnyHit == true) {
+                // we're temporarily hacking in an object that casts no shadow 
+                if (m.isTranslucent != 0) {
+                    return td;
                 }
             }
         }
-        return least;
     }
+    return least;
+}
 ` +
         // calculate the intersection of a ray and a triangle
         `
-    TriangleDistance triangleIntersection(Triangle triangle, Ray ray) {
-        TriangleDistance td = TriangleDistance(
-            -1.0, 
-            triangle,
-            vec3(0.0, 0.0, 0.0),
-            0.0,
-            0.0);
-    
-        // compute full scale normal
-        vec3 v0v1 = triangle.b - triangle.a;
-        vec3 v0v2 = triangle.c - triangle.a;
-        vec3 pvec = cross(ray.vector, v0v2);
-        float det = dot(v0v1, pvec);
+TriangleDistance triangleIntersection(Triangle triangle, Ray ray) {
+    TriangleDistance td = TriangleDistance(
+        -1.0, 
+        triangle,
+        vec3(0.0, 0.0, 0.0),
+        0.0,
+        0.0);
 
-        if (abs(det) < ${epsilon}) {
-            return td;
-        }
+    // compute full scale normal
+    vec3 v0v1 = triangle.b - triangle.a;
+    vec3 v0v2 = triangle.c - triangle.a;
+    vec3 pvec = cross(ray.vector, v0v2);
+    float det = dot(v0v1, pvec);
 
-        float invDet = 1.0 / det;
-
-        vec3 tvec = ray.point - triangle.a;
-        float u = dot(tvec, pvec) * invDet;
-        if (u < 0.0 || u > 1.0) {
-            return td;
-        }
-
-        vec3 qvec = cross(tvec, v0v1);
-        float v = dot(ray.vector, qvec) * invDet;
-        if (v < 0.0 || (u + v) > 1.0) {
-            return td;
-        }
-
-        td.u = u;
-        td.v = v;
-        td.distance = dot(v0v2, qvec) * invDet;
-        td.intersectPoint = vec3(triangle.a.xyz + u * v0v1.xyz + v * v0v2.xyz);
-
+    if (abs(det) < ${epsilon}) {
         return td;
     }
 
-    float sphereIntersection(Sphere sphere, Ray ray) {
-        vec3 eyeToCentre = sphere.point - ray.point;
-        float v = dot(eyeToCentre, ray.vector);
-        float eoDot = dot(eyeToCentre, eyeToCentre);
-        float discriminant = (sphere.radius * sphere.radius) - eoDot + (v * v);
+    float invDet = 1.0 / det;
 
-        if (discriminant < 0.0) {
-            return -1.0;
-        }
-
-        return v - sqrt(discriminant);
+    vec3 tvec = ray.point - triangle.a;
+    float u = dot(tvec, pvec) * invDet;
+    if (u < 0.0 || u > 1.0) {
+        return td;
     }
+
+    vec3 qvec = cross(tvec, v0v1);
+    float v = dot(ray.vector, qvec) * invDet;
+    if (v < 0.0 || (u + v) > 1.0) {
+        return td;
+    }
+
+    td.u = u;
+    td.v = v;
+    td.distance = dot(v0v2, qvec) * invDet;
+    td.intersectPoint = vec3(triangle.a.xyz + u * v0v1.xyz + v * v0v2.xyz);
+
+    return td;
+}
+
+float sphereIntersection(Sphere sphere, Ray ray) {
+    vec3 eyeToCentre = sphere.point - ray.point;
+    float v = dot(eyeToCentre, ray.vector);
+    float eoDot = dot(eyeToCentre, eyeToCentre);
+    float discriminant = (sphere.radius * sphere.radius) - eoDot + (v * v);
+
+    if (discriminant < 0.0) {
+        return -1.0;
+    }
+
+    return v - sqrt(discriminant);
+}
 ` +
         // ray "extents" intersection
         `
-    // ExtentsIntersect extentsIntersection() {
-    //     for (int i = 0; i < ${acceleration.numPlaneSetNormals}; i += 1) {
-    //         float tNearExtents = (d[i][0] - precomputedNumerator[i]) / precomputedDenominator[i];
-    //     float tFarExtents = (d[i][1] - precomputedNumerator[i]) / precomputedDenominator[i];
-    //     if (precomputedDenominator[i] < 0) std::swap(tNearExtents, tFarExtents);
-    //     if (tNearExtents > tNear) tNear = tNearExtents, planeIndex = i;
-    //     if (tFarExtents < tFar) tFar = tFarExtents;
-    //     if (tNear > tFar) return false;
-    //     }
-    // }
+// ExtentsIntersect extentsIntersection() {
+//     for (int i = 0; i < ${acceleration.numPlaneSetNormals}; i += 1) {
+//         float tNearExtents = (d[i][0] - precomputedNumerator[i]) / precomputedDenominator[i];
+//     float tFarExtents = (d[i][1] - precomputedNumerator[i]) / precomputedDenominator[i];
+//     if (precomputedDenominator[i] < 0) std::swap(tNearExtents, tFarExtents);
+//     if (tNearExtents > tNear) tNear = tNearExtents, planeIndex = i;
+//     if (tFarExtents < tFar) tFar = tFarExtents;
+//     if (tNear > tFar) return false;
+//     }
+// }
 ` +
         // ray bounding volume hierarchy intersection
         `
-    bool bvhIntersection(Ray ray) {
-        float preComputedNumerator[${acceleration.numPlaneSetNormals}];
-        float preComputedDenominator[${acceleration.numPlaneSetNormals}];
+bool bvhIntersection(Ray ray) {
+    float preComputedNumerator[${acceleration.numPlaneSetNormals}];
+    float preComputedDenominator[${acceleration.numPlaneSetNormals}];
 
-        for (int i = 0; i < ${acceleration.numPlaneSetNormals}; i += 1) {
-            preComputedNumerator[i] = dot(planeSetNormals[i], ray.point);
-            preComputedDenominator[i] = dot(planeSetNormals[i], ray.vector);
-        }
-
-        int planeIndex;
-        float tNear = 0.0; 
-        float tFar = ${infinity}; // tNear, tFar for the intersected extents
-        
-        // if (!octree->root->nodeExtents.intersect(precomputedNumerator, precomputedDenominator, tNear, tFar, planeIndex) || tFar < 0)
-        // return false;
-
-        return false;
+    for (int i = 0; i < ${acceleration.numPlaneSetNormals}; i += 1) {
+        preComputedNumerator[i] = dot(planeSetNormals[i], ray.point);
+        preComputedDenominator[i] = dot(planeSetNormals[i], ray.vector);
     }
+
+    int planeIndex;
+    float tNear = 0.0; 
+    float tFar = ${infinity}; // tNear, tFar for the intersected extents
+    
+    // if (!octree->root->nodeExtents.intersect(precomputedNumerator, precomputedDenominator, tNear, tFar, planeIndex) || tFar < 0)
+    // return false;
+
+    return false;
+}
 ` +
         // is there a light visible from a point? (shadows)
         `
-    bool isLightVisible(vec3 pt, vec3 light, vec3 normal) {
-        vec3 unit = normalize(light - pt);
-        Ray ray = Ray(pt + vec3(normal.xyz + ${epsilon}), unit, refractionMedium);
-        SphereDistance sd = intersectSpheres(ray, true);
+bool isLightVisible(vec3 pt, vec3 light, vec3 normal) {
+    vec3 unit = normalize(light - pt);
+    Ray ray = Ray(pt + vec3(normal.xyz + ${epsilon}), unit, refractionMedium);
+    SphereDistance sd = intersectSpheres(ray, true);
 
-        if (sd.distance > 0.0) {
-            return false;
-        }
-
-        TriangleDistance td = intersectTriangles(ray, true);
-
-        return td.distance < 0.0;
-    }
-` +
-        // colour space conversion functions
-        `
-    float sRgb8ChannelToLinear(float colour8) {
-        const float sThresh = 0.04045;
-
-        float colourf = colour8 / 255.0;
-        if (colourf <= sThresh) {
-            return colourf / 12.92;
-        }
-
-        return pow((colourf + 0.055) / 1.055, 2.4);
-    }
-
-    vec3 sRgb8ToLinear(vec3 srgb8) {
-        return vec3(
-            sRgb8ChannelToLinear(srgb8.r),
-            sRgb8ChannelToLinear(srgb8.g),
-            sRgb8ChannelToLinear(srgb8.b)
-            );
-    }
-
-    float linearChannelToSrgbF(float linear) {
-        if (linear <= 0.0031308) {
-            return (linear * 12.92);
-        }
-
-        return (1.055 * pow(linear, 1.0/2.4) - 0.055);
-    }
-
-    vec3 linearToSrgbF(vec3 linear) {
-        return vec3(
-            linearChannelToSrgbF(linear.r),
-            linearChannelToSrgbF(linear.g),
-            linearChannelToSrgbF(linear.b)
-        );
-    }
-
-` +
-        // the bulk of the PBR loop
-        `
-    vec3 surfacePbrReflectance(Hit hit, vec3 N, vec3 V, vec3 R, vec3 reflectColour, vec3 refractColour) {
-        Material material = hit.material;
-        vec3 albedo = sRgb8ToLinear(material.colourOrAlbedo); // pow(material.colourOrAlbedo.rgb, vec3(2.2));
-        float ao = material.ambient;
-        float metallic = material.specularOrMetallic;
-        float roughness = material.diffuseOrRoughness;
-
-        vec3 F0 = vec3(${defaultF0}); 
-        F0 = mix(F0, albedo, metallic);
-
-        // reflectance equation
-        bool didLight = false;
-        vec3 Lo = vec3(0.0);
-        for (int i = 0; i < ${lightCount}; i += 1) {
-            if (isLightVisible(hit.position, pointLights[i].point, hit.normal) == true) {
-                didLight = true;
-                // calculate per-light radiance
-                vec3 lightDir = pointLights[i].point - hit.position;
-                float distance = length(lightDir);
-                vec3 L = normalize(lightDir);
-                vec3 H = normalize(V + L);
-                float attenuation = 1.0 / (distance * distance);
-                // @todo light colour
-                vec3 lightColour = sRgb8ToLinear(vec3(255.0, 255.0, 255.0) * 35.0);
-                vec3 radiance = lightColour.rgb * attenuation;
-
-                // Cook-Torrance BRDF
-                float NDF = DistributionGGX(N, H, roughness);   
-                float G   = GeometrySmith(N, V, L, roughness);      
-                vec3 F    = fresnelSchlickRoughness(max(dot(H, V), 0.0), F0, roughness);
-
-                vec3 nominator    = NDF * G * F; 
-                float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.001; // 0.001 to prevent divide by zero.
-                /** @todo use real physics, this violates the PBR to some extent */
-                vec3 specular = nominator / denominator + F * reflectColour * metallic;
-
-                // kS is equal to Fresnel
-                vec3 kS = F;
-                // for energy conservation, the diffuse and specular light can't
-                // be above 1.0 (unless the surface emits light); to preserve this
-                // relationship the diffuse component (kD) should equal 1.0 - kS.
-                vec3 kD = vec3(1.0) - kS;
-                // multiply kD by the inverse metalness such that only non-metals 
-                // have diffuse lighting, or a linear blend if partly metal (pure metals
-                // have no diffuse light).
-                kD *= 1.0 - metallic;	  
-                // scale light by NdotL
-                float NdotL = max(dot(N, L), 0.0);        
-
-                // add to outgoing radiance Lo
-                Lo += (kD * (albedo + refractColour) / PI + specular) * radiance * NdotL;  // note that we already multiplied the BRDF by the Fresnel (kS) so we won't multiply by kS again
-            }
-        }
-
-        if (didLight == false) {
-            return vec3(0.0, 0.0, 0.0);
-        }
-
-        // ambient lighting (will replace this ambient lighting with 
-        // environment lighting).
-        vec3 ambient = vec3(0.03) * albedo * ao;
-    
-        vec3 colour = ambient + Lo;
-
-
-        // HDR tonemapping
-        colour = colour / (colour + vec3(1.0));
-
-        colour = linearToSrgbF(colour);
-
-        return colour;
-    }
-` +
-        // PBR Surface functions
-        `
-    vec3 surfacePbr1(Hit hit) {
-        vec3 N = hit.normal;
-        vec3 V = normalize(hit.ray.point - hit.position);
-        vec3 R = reflect(-V, N);  
-        vec3 reflectColour = cast2(Ray(hit.position, R, hit.ray.ior)).rgb;
-        vec3 refractColour = vec3(0.0, 0.0, 0.0);
-
-        if (hit.material.isTranslucent == 1) {
-            if (areEqualish(hit.ray.ior, hit.material.refraction) == false) {
-            }
-        }
-
-        return surfacePbrReflectance(hit, N, V, R, reflectColour, refractColour);
-    }
-
-    vec3 surfacePbr2(Hit hit) {
-        vec3 N = hit.normal;
-        vec3 V = normalize(hit.ray.point - hit.position);
-        vec3 R = reflect(-V, N);   
-
-        return surfacePbrReflectance(hit, N, V, R, vec3(1.0, 1.0, 1.0), vec3(0.0, 0.0, 0.0));
-    }
-` +
-        // Blinn Phong functions
-        `
-    vec3 surfacePhong(Hit hit) {
-        Material material = hit.material;
-        vec3 fullColour = vec3(material.colourOrAlbedo.rgb / 255.0);
-        vec3 diffuse = vec3(0.0, 0.0, 0.0);
-        vec3 specular = vec3(0.0, 0.0, 0.0);
-
-        for (int i = 0; i < ${lightCount}; i += 1) {
-            if (isLightVisible(hit.position, pointLights[i].point, hit.normal) == true) {
-                // @todo light colour
-                vec3 lightColour = vec3(1.0, 1.0, 1.0);
-                vec3 lightDir = normalize(pointLights[i].point - hit.position);
-                float lightIntensity = 1.0;
-
-                // diffuse
-                float dco = dot(hit.normal, lightDir);
-                if (dco < 0.0) { dco = 0.0; }
-
-                diffuse += vec3(fullColour.rgb * lightIntensity * dco);
-
-                // specular
-                vec3 halfway = normalize(lightDir - hit.ray.vector);
-                float sco = dot(hit.normal, normalize(halfway));
-                if (sco < 0.0) { sco = 0.0; }
-                
-                specular += vec3(lightColour.rgb * lightIntensity * pow(sco, ${phongSpecularExp}));
-            }
-        }
-
-        // calculate ambient light
-        vec3 ambient = vec3(fullColour.rgb * globalAmbientIntensity);
-        ambient = vec3(ambient.rgb + (fullColour.rgb * material.ambient));
-
-        return ambient.rgb + diffuse.rgb * material.diffuseOrRoughness + specular.rgb * material.specularOrMetallic;
-    }
-` +
-        // are two floating points roughly equal?
-        `
-    bool areEqualish(float a, float b) {
-        if (abs(a - b) < ${epsilon}) {
-            return true;
-        }
+    if (sd.distance > 0.0) {
         return false;
     }
+
+    TriangleDistance td = intersectTriangles(ray, true);
+
+    return td.distance < 0.0;
+}
 ` +
         // hack around GLSL's inability to index arrays
         glslAccessor('Material', 'materials', 'getMaterial', materialCount, 0) +
-        // PBR Computations
-        // essentially straight from [Learn OpenGL](https://learnopengl.com/PBR/Theory "Learn OpenGL`")
-        `
-// ----------------------------------------------------------------------------
-    float DistributionGGX(vec3 N, vec3 H, float roughness) {
-        float a = roughness*roughness;
-        float a2 = a*a;
-        float NdotH = max(dot(N, H), 0.0);
-        float NdotH2 = NdotH*NdotH;
-
-        float nom   = a2;
-        float denom = (NdotH2 * (a2 - 1.0) + 1.0);
-        denom = PI * denom * denom;
-
-        return nom / denom;
-    }
-// ----------------------------------------------------------------------------
-    float GeometrySchlickGGX(float NdotV, float roughness) {
-        float r = (roughness + 1.0);
-        float k = (r*r) / 8.0;
-
-        float nom   = NdotV;
-        float denom = NdotV * (1.0 - k) + k;
-
-        return nom / denom;
-    }
-// ----------------------------------------------------------------------------
-    float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
-        float NdotV = max(dot(N, V), 0.0);
-        float NdotL = max(dot(N, L), 0.0);
-        float ggx2 = GeometrySchlickGGX(NdotV, roughness);
-        float ggx1 = GeometrySchlickGGX(NdotL, roughness);
-
-        return ggx1 * ggx2;
-    }
-// ----------------------------------------------------------------------------
-    vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
-        return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(1.0 - cosTheta, 5.0);
-    }   
-` +
-        // we will need a function that can get random data out of textures
-        `
-    vec2 indexToCoord(int index, float len) {
-        return vec2(
-            (float(index) + 0.5) / len,
-            0.0
-        );
-    }
-
-` +
         // we will need some functions to transform data in data structures to more meaningful
         // structures we can work with
         //
         // getTriangle
         `
-    Triangle getTriangle(int index) {
-        int expandedIndex = index * triangles.size;
-        float len = float(triangles.size * triangles.length);
+Triangle getTriangle(int index) {
+    int expandedIndex = index * triangles.size;
+    float len = float(triangles.size * triangles.length);
 
-        vec3 a = vec3(
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 0, len)), false),
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 1, len)), false),
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 2, len)), false)
-        );
+    vec3 a = vec3(
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 0, len)), false),
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 1, len)), false),
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 2, len)), false)
+    );
 
-        vec3 b = vec3(
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 3, len)), false),
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 4, len)), false),
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 5, len)), false)
-        );
+    vec3 b = vec3(
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 3, len)), false),
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 4, len)), false),
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 5, len)), false)
+    );
 
-        vec3 c = vec3(
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 6, len)), false),
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 7, len)), false),
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 8, len)), false)
-        );
+    vec3 c = vec3(
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 6, len)), false),
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 7, len)), false),
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 8, len)), false)
+    );
 
-        vec3 normal = vec3(
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 9, len)), false),
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 10, len)), false),
-            fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 11, len)), false)
-        );
+    vec3 normal = vec3(
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 9, len)), false),
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 10, len)), false),
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 11, len)), false)
+    );
 
-        int material = int(fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 12, len)), false));
+    int material = int(fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 12, len)), false));
 
-        // return Triangle(vec3(25.0, 0.0, -25.0), vec3(-25.0, 0.0, -25.0), vec3(-25.0, 0.0, 25.0), vec3(0.0, 1.0, 0.0), 0);
-        return Triangle(a, b, c, normal, material);
-    }
-` +
-        // we need a function to convert encoded floats back to floats
-        // this is interesting as JS converts to RGBA unsigned integers, then
-        // GL converts those to 0.0-1.0 range, then we convert that back to integers
-        // and finally back to floats 
-        `
-// ----------------------------------------------------------------------------
-    float fourByteToFloat(vec4 value, bool isUnsigned) {
-        /** NOTE also converts from float percentages of 255 to "whole" numbers */
-        float sign;
-        float bigEndOrZero;
-        float bigEnd;
-
-        if (isUnsigned == true) {
-            return float(value.r * 255.0 * 256.0 * 256.0 * 256.0 + 
-                        value.g * 255.0 * 256.0 * 256.0 +
-                        value.b * 255.0 * 256.0 +
-                        value.a * 255.0);
-        } else {
-            sign = value.r * 255.0 > 127.0 ? -1.0 : 1.0; 
-            bigEndOrZero = value.r * 255.0 == 255.0 ? 0.0 : value.r;
-            bigEnd = bigEndOrZero > 127.0 ? bigEndOrZero - 127.0 : bigEndOrZero;
-
-            return sign * (
-            bigEnd * 255.0 * 256.0 * 256.0 * 256.0 +
-            value.g * 255.0 * 256.0 * 256.0 +
-            value.b * 255.0 * 256.0 +
-            value.a * 255.0
-            );
-        }
-    }
-// ----------------------------------------------------------------------------
+    return Triangle(a, b, c, normal, material);
+}
 `;
 }
 // ## Utility Functions

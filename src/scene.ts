@@ -208,8 +208,6 @@ function getScene(sphereCount = 57, minOrbit = 3) {
       rotation: [0, 0, 0] as Matrix3_1,
       up: [0, 1, 0] as Matrix3_1,
     },
-    // in the BlinnPhong model we'll have a hard coded ambient lighting intensity
-    globalAmbientIntensity: 0.002,
     // for simplicity our lights are just a single point in space
     lights: [[-25, 30, 10], [0, 3, 0]] as Matrix3_1[],
     // place the materials object in the scene
@@ -313,18 +311,17 @@ function setupScene(gl: WebGLRenderingContext, context: ProgramContext, scene: S
     u.aspectRatio(aspectRatio);
     u.cameraMatrix(cameraMatrix);
     u.cameraPos(origin);
-    u.globalAmbientIntensity(scene.globalAmbientIntensity);
     u.height(height);
     u.scale(scale);
     u.width(width);
-    u.aa(0);
 
+    console.log(u);
     materials.forEach((m, i) => {
         u.materials[i].colourOrAlbedo(m.colour);
         u.materials[i].ambient(m.ambient);
         u.materials[i].diffuseOrRoughness(m.diffuse);
         u.materials[i].specularOrMetallic(m.specular);
-        u.materials[i].refraction(m.refraction);
+        // u.materials[i].refraction(m.refraction);
         u.materials[i].isTranslucent(m.isTranslucent);
     });
 
