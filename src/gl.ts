@@ -265,33 +265,20 @@ function getUniformDescription(shaderConfig: ConfigShader): UniformDescription[]
     {
       children: [
         {
-          name: 'colourOrAlbedo',
-          type: 'vec3',
-        },
-        {
-          name: 'ambient',
-          type: 'float',
-        },
-        {
-          name: 'diffuseOrRoughness',
-          type: 'float',
-        },
-        {
-          name: 'isTranslucent',
+          name: 'length',
           type: 'int',
         },
-        // {
-        //   name: 'refraction',
-        //   type: 'float',
-        // },
         {
-          name: 'specularOrMetallic',
-          type: 'float',
+          name: 'size',
+          type: 'int',
         },
       ],
-      length: shaderConfig.materialCount,
       name: 'materials',
       type: 'struct',
+    },
+    {
+      name: 'materialsData',
+      type: 'sampler2D',
     },
     {
       children: [

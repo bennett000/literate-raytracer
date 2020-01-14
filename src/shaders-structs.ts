@@ -24,7 +24,7 @@ struct Material {
     float diffuseOrRoughness;
     float specularOrMetallic;
     float refraction;
-    int isTranslucent;
+    bool isTranslucent;
 };
 ` +
 

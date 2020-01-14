@@ -578,33 +578,20 @@ function getUniformDescription(shaderConfig) {
         {
             children: [
                 {
-                    name: 'colourOrAlbedo',
-                    type: 'vec3',
-                },
-                {
-                    name: 'ambient',
-                    type: 'float',
-                },
-                {
-                    name: 'diffuseOrRoughness',
-                    type: 'float',
-                },
-                {
-                    name: 'isTranslucent',
+                    name: 'length',
                     type: 'int',
                 },
-                // {
-                //   name: 'refraction',
-                //   type: 'float',
-                // },
                 {
-                    name: 'specularOrMetallic',
-                    type: 'float',
+                    name: 'size',
+                    type: 'int',
                 },
             ],
-            length: shaderConfig.materialCount,
             name: 'materials',
             type: 'struct',
+        },
+        {
+            name: 'materialsData',
+            type: 'sampler2D',
         },
         {
             children: [
@@ -2061,6 +2048,56 @@ function encodeSpheres(scene) {
     };
 }
 //
+// <a name="encodeMaterials"></a>
+// ### encodeMaterials
+function encodeMaterials(scene) {
+    const size = /* colour */ 3 /* ambient */ + 1 /* diffuse/rough */ + 1 /* specular/metal */ + 1 /* refraction */ + 1 /* isTranslucent */ + 1;
+    const sizeRaw = size * 4;
+    const length = scene.spheres.length;
+    const width = length * size;
+    const lengthRaw = width * 4;
+    const data = new Uint8Array(lengthRaw);
+    const insertPoint = insertPointInto(data);
+    scene.materials.forEach((m, i) => {
+        const pointer = i * sizeRaw;
+        insertPoint(m.colour, 0 + pointer);
+        const ambient = fourByteFromFloat(m.ambient * PACKED_FLOAT_MULTIPLIER);
+        data[12 + pointer] = ambient[0];
+        data[13 + pointer] = ambient[1];
+        data[14 + pointer] = ambient[2];
+        data[15 + pointer] = ambient[3];
+        const diffuse = fourByteFromFloat(m.diffuse * PACKED_FLOAT_MULTIPLIER);
+        data[16 + pointer] = diffuse[0];
+        data[17 + pointer] = diffuse[1];
+        data[18 + pointer] = diffuse[2];
+        data[19 + pointer] = diffuse[3];
+        const specular = fourByteFromFloat(m.specular * PACKED_FLOAT_MULTIPLIER);
+        data[20 + pointer] = specular[0];
+        data[21 + pointer] = specular[1];
+        data[22 + pointer] = specular[2];
+        data[23 + pointer] = specular[3];
+        const refraction = fourByteFromFloat(m.refraction * PACKED_FLOAT_MULTIPLIER);
+        data[24 + pointer] = refraction[0];
+        data[25 + pointer] = refraction[1];
+        data[26 + pointer] = refraction[2];
+        data[27 + pointer] = refraction[3];
+        const isTranslucent = fourByteFromFloat(m.isTranslucent ? 1 : 0);
+        data[28 + pointer] = isTranslucent[0];
+        data[29 + pointer] = isTranslucent[1];
+        data[30 + pointer] = isTranslucent[2];
+        data[31 + pointer] = isTranslucent[3];
+    }, false);
+    return {
+        data,
+        height: 1,
+        length,
+        size,
+        targetUniformSampler: 'materialsData',
+        targetUniformStruct: 'materials',
+        width,
+    };
+}
+//
 // <a name="createDataTexture"></a>
 // ### createDataTexture
 //
@@ -2099,14 +2136,6 @@ function setupScene(gl, scene, uniforms) {
     uniforms.height(height);
     uniforms.scale(scale);
     uniforms.width(width);
-    materials.forEach((m, i) => {
-        uniforms.materials[i].colourOrAlbedo(m.colour);
-        uniforms.materials[i].ambient(m.ambient);
-        uniforms.materials[i].diffuseOrRoughness(m.diffuse);
-        uniforms.materials[i].specularOrMetallic(m.specular);
-        // u.materials[i].refraction(m.refraction);
-        uniforms.materials[i].isTranslucent(m.isTranslucent);
-    });
     lights.forEach((l, i) => {
         uniforms.pointLights[i].point(l);
     });
@@ -2146,10 +2175,20 @@ function updateTriangles(gl, scene, uniforms, texture, unit) {
     const triangles = encodeTriangles(scene);
     return updateGenericDataTexture(gl, uniforms, triangles, texture, unit);
 }
+function setupMaterials(gl, scene, uniforms, unit) {
+    const materials = encodeMaterials(scene);
+    return setupGenericDataTexture(gl, uniforms, materials, unit);
+}
+function updateMaterials(gl, scene, uniforms, texture, unit) {
+    const materials = encodeMaterials(scene);
+    return updateGenericDataTexture(gl, uniforms, materials, texture, unit);
+}
 function setupDataTextures(gl, scene, uniforms) {
     const spheres = setupSpheres(gl, scene, uniforms, 1);
+    const materials = setupMaterials(gl, scene, uniforms, 2);
     const triangles = setupTriangles(gl, scene, uniforms, 3);
     return {
+        materials,
         spheres,
         triangles,
     };
@@ -2356,7 +2395,7 @@ vec3 surface1(Hit hit) {
     vec3 reflectColour = cast2(Ray(hit.position, R, hit.ray.ior)).rgb;
     vec3 refractColour = vec3(0.0, 0.0, 0.0);
 
-    if (hit.material.isTranslucent == 1) {
+    if (hit.material.isTranslucent == true) {
         if (areEqualish(hit.ray.ior, hit.material.refraction) == false) {
         }
     }
@@ -2517,7 +2556,7 @@ struct Material {
     float diffuseOrRoughness;
     float specularOrMetallic;
     float refraction;
-    int isTranslucent;
+    bool isTranslucent;
 };
 ` +
         // `Hit`s describe the intersection of a `Ray` and an object
@@ -2800,8 +2839,10 @@ uniform float width;
         //
         //
         `
-uniform Material materials[${materialCount}];
 uniform PointLight pointLights[${lightCount}];
+
+uniform sampler2D materialsData ;
+uniform TextureDataStructure materials;
 
 uniform sampler2D spheresData;
 uniform TextureDataStructure spheres;
@@ -2884,7 +2925,7 @@ Hit trace(Ray ray) {
     if (sd.distance <= 0.0 && td.distance <= 0.0) {
         return Hit(
             -1.0,
-            Material(vec3(0.0, 0.0, 0.0), 0.0, 0.0, 0.0, 0.0, 0),
+            Material(vec3(0.0, 0.0, 0.0), 0.0, 0.0, 0.0, 0.0, false),
             vec3(0.0, 0.0, 0.0),
             vec3(0.0, 0.0, 0.0),
             ray
@@ -2987,14 +3028,14 @@ SphereDistance intersectSpheres(Ray ray, bool useAnyHit) {
             // we're temporarily hacking in an object that casts no shadow 
             Material m = getMaterial(sd.sphere.material);
             if (sd.distance <= 0.0 || dist < sd.distance) {
-                if (useAnyHit == false || m.isTranslucent == 0) {
+                if (useAnyHit == false || m.isTranslucent == false) {
                     sd.distance = dist;
                     sd.sphere = s;
                 }
             }
             if (useAnyHit) {
                 // we're temporarily hacking in an object that casts no shadow 
-                if (m.isTranslucent != 0) {
+                if (m.isTranslucent != false) {
                     sd.distance = dist;
                     sd.sphere = s;
                     return sd;
@@ -3025,13 +3066,13 @@ TriangleDistance intersectTriangles(Ray ray, bool useAnyHit) {
             // we're temporarily hacking in an object that casts no shadow 
             Material m = getMaterial(td.triangle.material);
             if (least.distance <= 0.0 || td.distance < least.distance) {
-                if (useAnyHit == false || m.isTranslucent == 0) {
+                if (useAnyHit == false || m.isTranslucent == false) {
                     least = td;
                 }
             }
             if (useAnyHit == true) {
                 // we're temporarily hacking in an object that casts no shadow 
-                if (m.isTranslucent != 0) {
+                if (m.isTranslucent != false) {
                     return td;
                 }
             }
@@ -3145,8 +3186,6 @@ bool isLightVisible(vec3 pt, vec3 light, vec3 normal) {
     return td.distance < 0.0;
 }
 ` +
-        // hack around GLSL's inability to index arrays
-        glslAccessor('Material', 'materials', 'getMaterial', materialCount, 0) +
         // we will need some functions to transform data in data structures to more meaningful
         // structures we can work with
         //
@@ -3201,6 +3240,29 @@ Sphere getSphere(int index) {
     int material = int(fourByteToFloat(texture2D(spheresData, indexToCoord(expandedIndex + 4, len)), false));
 
     return Sphere(centre, radius, material);
+}` +
+        // We'll want a function for fetching materials
+        `
+Material getMaterial(int index) {
+    int expandedIndex = index * materials.size;
+    float len = float(materials.size * materials.length);
+
+    vec3 colourOrAlbedo = vec3(
+        fourByteToFloat(texture2D(materialsData, indexToCoord(expandedIndex + 0, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(materialsData, indexToCoord(expandedIndex + 1, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(materialsData, indexToCoord(expandedIndex + 2, len)), false) / ${packedFloatMultiplier}
+    );
+
+    float ambient = fourByteToFloat(texture2D(materialsData, indexToCoord(expandedIndex + 3, len)), false) / ${packedFloatMultiplier};
+    float diffuseOrRough = fourByteToFloat(texture2D(materialsData, indexToCoord(expandedIndex + 4, len)), false) / ${packedFloatMultiplier};
+    float specularOrMetal = fourByteToFloat(texture2D(materialsData, indexToCoord(expandedIndex + 5, len)), false) / ${packedFloatMultiplier};
+    float refraction = fourByteToFloat(texture2D(materialsData, indexToCoord(expandedIndex + 6, len)), false) / ${packedFloatMultiplier};
+    bool isTranslucent = false;
+    if (int(fourByteToFloat(texture2D(materialsData, indexToCoord(expandedIndex + 7, len)), false)) == 1) {
+        isTranslucent = true;
+    }
+
+    return Material(colourOrAlbedo, ambient, diffuseOrRough, specularOrMetal, refraction, isTranslucent);
 }` +
         `
 `;

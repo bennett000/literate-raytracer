@@ -102,8 +102,10 @@ uniform float width;
 //
 //
 `
-uniform Material materials[${materialCount}];
 uniform PointLight pointLights[${lightCount}];
+
+uniform sampler2D materialsData ;
+uniform TextureDataStructure materials;
 
 uniform sampler2D spheresData;
 uniform TextureDataStructure spheres;
@@ -192,7 +194,7 @@ Hit trace(Ray ray) {
     if (sd.distance <= 0.0 && td.distance <= 0.0) {
         return Hit(
             -1.0,
-            Material(vec3(0.0, 0.0, 0.0), 0.0, 0.0, 0.0, 0.0, 0),
+            Material(vec3(0.0, 0.0, 0.0), 0.0, 0.0, 0.0, 0.0, false),
             vec3(0.0, 0.0, 0.0),
             vec3(0.0, 0.0, 0.0),
             ray
@@ -297,14 +299,14 @@ SphereDistance intersectSpheres(Ray ray, bool useAnyHit) {
             // we're temporarily hacking in an object that casts no shadow 
             Material m = getMaterial(sd.sphere.material);
             if (sd.distance <= 0.0 || dist < sd.distance) {
-                if (useAnyHit == false || m.isTranslucent == 0) {
+                if (useAnyHit == false || m.isTranslucent == false) {
                     sd.distance = dist;
                     sd.sphere = s;
                 }
             }
             if (useAnyHit) {
                 // we're temporarily hacking in an object that casts no shadow 
-                if (m.isTranslucent != 0) {
+                if (m.isTranslucent != false) {
                     sd.distance = dist;
                     sd.sphere = s;
                     return sd;
@@ -336,13 +338,13 @@ TriangleDistance intersectTriangles(Ray ray, bool useAnyHit) {
             // we're temporarily hacking in an object that casts no shadow 
             Material m = getMaterial(td.triangle.material);
             if (least.distance <= 0.0 || td.distance < least.distance) {
-                if (useAnyHit == false || m.isTranslucent == 0) {
+                if (useAnyHit == false || m.isTranslucent == false) {
                     least = td;
                 }
             }
             if (useAnyHit == true) {
                 // we're temporarily hacking in an object that casts no shadow 
-                if (m.isTranslucent != 0) {
+                if (m.isTranslucent != false) {
                     return td;
                 }
             }
@@ -462,8 +464,6 @@ bool isLightVisible(vec3 pt, vec3 light, vec3 normal) {
     return td.distance < 0.0;
 }
 ` +
-// hack around GLSL's inability to index arrays
-glslAccessor('Material', 'materials', 'getMaterial', materialCount, 0) +
 
 
 // we will need some functions to transform data in data structures to more meaningful
@@ -522,6 +522,30 @@ Sphere getSphere(int index) {
     int material = int(fourByteToFloat(texture2D(spheresData, indexToCoord(expandedIndex + 4, len)), false));
 
     return Sphere(centre, radius, material);
+}` +
+
+// We'll want a function for fetching materials
+`
+Material getMaterial(int index) {
+    int expandedIndex = index * materials.size;
+    float len = float(materials.size * materials.length);
+
+    vec3 colourOrAlbedo = vec3(
+        fourByteToFloat(texture2D(materialsData, indexToCoord(expandedIndex + 0, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(materialsData, indexToCoord(expandedIndex + 1, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(materialsData, indexToCoord(expandedIndex + 2, len)), false) / ${packedFloatMultiplier}
+    );
+
+    float ambient = fourByteToFloat(texture2D(materialsData, indexToCoord(expandedIndex + 3, len)), false) / ${packedFloatMultiplier};
+    float diffuseOrRough = fourByteToFloat(texture2D(materialsData, indexToCoord(expandedIndex + 4, len)), false) / ${packedFloatMultiplier};
+    float specularOrMetal = fourByteToFloat(texture2D(materialsData, indexToCoord(expandedIndex + 5, len)), false) / ${packedFloatMultiplier};
+    float refraction = fourByteToFloat(texture2D(materialsData, indexToCoord(expandedIndex + 6, len)), false) / ${packedFloatMultiplier};
+    bool isTranslucent = false;
+    if (int(fourByteToFloat(texture2D(materialsData, indexToCoord(expandedIndex + 7, len)), false)) == 1) {
+        isTranslucent = true;
+    }
+
+    return Material(colourOrAlbedo, ambient, diffuseOrRough, specularOrMetal, refraction, isTranslucent);
 }` +
 
 `

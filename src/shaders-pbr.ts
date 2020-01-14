@@ -101,7 +101,7 @@ vec3 surface1(Hit hit) {
     vec3 reflectColour = cast2(Ray(hit.position, R, hit.ray.ior)).rgb;
     vec3 refractColour = vec3(0.0, 0.0, 0.0);
 
-    if (hit.material.isTranslucent == 1) {
+    if (hit.material.isTranslucent == true) {
         if (areEqualish(hit.ray.ior, hit.material.refraction) == false) {
         }
     }

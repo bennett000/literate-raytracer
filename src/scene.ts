@@ -345,6 +345,59 @@ function encodeSpheres(scene: Scene): TextureDataStructureEncoding {
     };
 }
 
+//
+// <a name="encodeMaterials"></a>
+// ### encodeMaterials
+function encodeMaterials(scene: Scene): TextureDataStructureEncoding {
+    const size = /* colour */ 3 /* ambient */ + 1 /* diffuse/rough */ + 1 /* specular/metal */ + 1 /* refraction */  + 1 /* isTranslucent */ + 1;
+    const sizeRaw = size * 4;
+    const length = scene.spheres.length;
+    const width = length * size;
+    const lengthRaw = width * 4;
+    const data = new Uint8Array(lengthRaw);
+
+    const insertPoint = insertPointInto(data);
+    scene.materials.forEach((m, i) => {
+      const pointer = i * sizeRaw;
+      insertPoint(m.colour, 0 + pointer);
+      const ambient = fourByteFromFloat(m.ambient * PACKED_FLOAT_MULTIPLIER);
+      data[12 + pointer] = ambient[0];
+      data[13 + pointer] = ambient[1];
+      data[14 + pointer] = ambient[2];
+      data[15 + pointer] = ambient[3];
+      const diffuse = fourByteFromFloat(m.diffuse * PACKED_FLOAT_MULTIPLIER);
+      data[16 + pointer] = diffuse[0];
+      data[17 + pointer] = diffuse[1];
+      data[18 + pointer] = diffuse[2];
+      data[19 + pointer] = diffuse[3];
+      const specular = fourByteFromFloat(m.specular * PACKED_FLOAT_MULTIPLIER);
+      data[20 + pointer] = specular[0];
+      data[21 + pointer] = specular[1];
+      data[22 + pointer] = specular[2];
+      data[23 + pointer] = specular[3];
+      const refraction = fourByteFromFloat(m.refraction * PACKED_FLOAT_MULTIPLIER);
+      data[24 + pointer] = refraction[0];
+      data[25 + pointer] = refraction[1];
+      data[26 + pointer] = refraction[2];
+      data[27 + pointer] = refraction[3];
+      const isTranslucent = fourByteFromFloat(m.isTranslucent ? 1 : 0);
+      data[28 + pointer] = isTranslucent[0];
+      data[29 + pointer] = isTranslucent[1];
+      data[30 + pointer] = isTranslucent[2];
+      data[31 + pointer] = isTranslucent[3];
+    }, false);
+
+    return {
+      data,
+      height: 1,
+      length,
+      size,
+      targetUniformSampler: 'materialsData',
+      targetUniformStruct: 'materials',
+      width,
+    };
+}
+
 
 //
 // <a name="createDataTexture"></a>
@@ -393,15 +446,6 @@ function setupScene(gl: WebGLRenderingContext, scene: Scene, uniforms: any) {
     uniforms.height(height);
     uniforms.scale(scale);
     uniforms.width(width);
-
-    materials.forEach((m, i) => {
-        uniforms.materials[i].colourOrAlbedo(m.colour);
-        uniforms.materials[i].ambient(m.ambient);
-        uniforms.materials[i].diffuseOrRoughness(m.diffuse);
-        uniforms.materials[i].specularOrMetallic(m.specular);
-        // u.materials[i].refraction(m.refraction);
-        uniforms.materials[i].isTranslucent(m.isTranslucent);
-    });
 
     lights.forEach((l, i) => {
         uniforms.pointLights[i].point(l);
@@ -453,11 +497,23 @@ function updateTriangles(gl: WebGLRenderingContext, scene: Scene, uniforms: any,
     return updateGenericDataTexture(gl, uniforms, triangles, texture, unit);
 }
 
+function setupMaterials(gl: WebGLRenderingContext, scene: Scene, uniforms: any, unit: number) {
+    const materials = encodeMaterials(scene);
+    return setupGenericDataTexture(gl, uniforms, materials, unit);
+}
+
+function updateMaterials(gl: WebGLRenderingContext, scene: Scene, uniforms: any, texture: WebGLTexture, unit: number) {
+    const materials = encodeMaterials(scene);
+    return updateGenericDataTexture(gl, uniforms, materials, texture, unit);
+}
+
 function setupDataTextures(gl: WebGLRenderingContext, scene: Scene, uniforms: any) {
   const spheres = setupSpheres(gl, scene, uniforms, 1);
+  const materials = setupMaterials(gl, scene, uniforms, 2);
   const triangles = setupTriangles(gl, scene, uniforms, 3);
 
     return {
+      materials,
       spheres,
       triangles,
     };
