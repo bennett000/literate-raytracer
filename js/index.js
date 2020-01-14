@@ -534,6 +534,7 @@ function draw(gl, context, canvas) {
     // if the screen resized, re-initatlize the scene
     if (resize(canvas)) {
         setupScene(gl, g_scene, g_glState.uniforms);
+        gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
     }
     // clear the screen
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -619,21 +620,20 @@ function getUniformDescription(shaderConfig) {
         {
             children: [
                 {
-                    name: 'material',
+                    name: 'length',
                     type: 'int',
                 },
                 {
-                    name: 'point',
-                    type: 'vec3',
-                },
-                {
-                    name: 'radius',
-                    type: 'float',
+                    name: 'size',
+                    type: 'int',
                 },
             ],
-            length: shaderConfig.sphereCount,
             name: 'spheres',
             type: 'struct',
+        },
+        {
+            name: 'spheresData',
+            type: 'sampler2D',
         },
         {
             children: [
@@ -923,6 +923,11 @@ g_logger.log('hello world');
 // can see shadows
 const g_floorPlaneSize = 25;
 const g_scene = getScene();
+// We're going to be passing data into the GPU using textures, this is going to
+// require some tricks/hacks, one of those is encoding floats in RGBA quads...
+// our conversion is a simple integer encoding and we'll simulate decimals with
+// a multiplier
+const PACKED_FLOAT_MULTIPLIER = 10000;
 const g_configShader = getShaderConfiguration(g_scene);
 // 
 // <a name="html"></a>
@@ -1098,8 +1103,9 @@ const animate = (time) => {
             sphere.point = [state.matrix[12], state.matrix[13], state.matrix[14]];
             g_planetStates[i] = state;
         }
-        g_glState.uniforms.spheres[i].point(sphere.point);
     });
+    updateSpheres(g_glState.gl, g_scene, g_glState.uniforms, g_glState.textures.spheres, 1);
+    // updateTriangles(g_glState.gl, g_scene, g_glState.uniforms, g_glState.textures.triangles, 3);
     draw(g_glState.gl, g_glState.ctx, g_canvas);
     requestAnimationFrame(animate);
 };
@@ -1963,6 +1969,30 @@ function getScene(sphereCount = 57, minOrbit = 3) {
     };
 }
 //
+// <a name="insertPointInto"></a>
+// ## insertPointInto
+//
+// helper function for our functions that will encode things for the GPU
+function insertPointInto(data) {
+    return (point, index) => {
+        const x = fourByteFromFloat(point[0] * PACKED_FLOAT_MULTIPLIER);
+        const y = fourByteFromFloat(point[1] * PACKED_FLOAT_MULTIPLIER);
+        const z = fourByteFromFloat(point[2] * PACKED_FLOAT_MULTIPLIER);
+        data[index + 0] = x[0];
+        data[index + 1] = x[1];
+        data[index + 2] = x[2];
+        data[index + 3] = x[3];
+        data[index + 4] = y[0];
+        data[index + 5] = y[1];
+        data[index + 6] = y[2];
+        data[index + 7] = y[3];
+        data[index + 8] = z[0];
+        data[index + 9] = z[1];
+        data[index + 10] = z[2];
+        data[index + 11] = z[3];
+    };
+}
+//
 // <a name="encodeTriangle"></a>
 // ## encodeTriangle
 function encodeTriangles(scene) {
@@ -1972,25 +2002,9 @@ function encodeTriangles(scene) {
     const width = length * size;
     const lengthRaw = width * 4;
     const data = new Uint8Array(lengthRaw);
+    const insertPoint = insertPointInto(data);
     scene.triangleNormals((normal, t, i) => {
         const pointer = i * sizeRaw;
-        const insertPoint = (point, index) => {
-            const x = fourByteFromFloat(point[0]);
-            const y = fourByteFromFloat(point[1]);
-            const z = fourByteFromFloat(point[2]);
-            data[index + 0] = x[0];
-            data[index + 1] = x[1];
-            data[index + 2] = x[2];
-            data[index + 3] = x[3];
-            data[index + 4] = y[0];
-            data[index + 5] = y[1];
-            data[index + 6] = y[2];
-            data[index + 7] = y[3];
-            data[index + 8] = z[0];
-            data[index + 9] = z[1];
-            data[index + 10] = z[2];
-            data[index + 11] = z[3];
-        };
         insertPoint(t.points[0], 0 + pointer);
         insertPoint(t.points[1], 12 + pointer);
         insertPoint(t.points[2], 24 + pointer);
@@ -2003,8 +2017,46 @@ function encodeTriangles(scene) {
     }, false);
     return {
         data,
+        height: 1,
         length,
         size,
+        targetUniformSampler: 'trianglesData',
+        targetUniformStruct: 'triangles',
+        width,
+    };
+}
+//
+// <a name="encodeSphere"></a>
+// ## encodeSphere
+function encodeSpheres(scene) {
+    const size = /* centre */ 3 + /* radius */ +1 + /* material */ +1;
+    const sizeRaw = size * 4;
+    const length = scene.spheres.length;
+    const width = length * size;
+    const lengthRaw = width * 4;
+    const data = new Uint8Array(lengthRaw);
+    const insertPoint = insertPointInto(data);
+    scene.spheres.forEach((sphere, i) => {
+        const pointer = i * sizeRaw;
+        insertPoint(sphere.point, 0 + pointer);
+        const radius = fourByteFromFloat(sphere.radius * PACKED_FLOAT_MULTIPLIER);
+        data[12 + pointer] = radius[0];
+        data[13 + pointer] = radius[1];
+        data[14 + pointer] = radius[2];
+        data[15 + pointer] = radius[3];
+        const material = fourByteFromFloat(sphere.material);
+        data[16 + pointer] = material[0];
+        data[17 + pointer] = material[1];
+        data[18 + pointer] = material[2];
+        data[19 + pointer] = material[3];
+    }, false);
+    return {
+        data,
+        height: 1,
+        length,
+        size,
+        targetUniformSampler: 'spheresData',
+        targetUniformStruct: 'spheres',
         width,
     };
 }
@@ -2014,9 +2066,10 @@ function encodeTriangles(scene) {
 //
 // we need a way of giving the GPU lots of data about things like verticies, bounding boxes
 // etc.  We can pack this info into a "data texture"
-function createDataTexture(gl, width, height, data) {
+function createDataTexture(gl, width, height, data, unit) {
     const texture = gl.createTexture();
     throwIfFalsey(texture, 'could not create data texture');
+    gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
@@ -2029,7 +2082,7 @@ function createDataTexture(gl, width, height, data) {
 // <a name="setupScene"></a>
 // ## setupScene
 function setupScene(gl, scene, uniforms) {
-    const { camera, materials, spheres, lights } = scene;
+    const { camera, materials, lights } = scene;
     const cameraMatrix = zRotate4_4(yRotate4_4(xRotate4_4(translate4_4(identity4_4(), camera.point[0], camera.point[1], camera.point[2]), camera.rotation[0]), camera.rotation[1]), camera.rotation[2]);
     const scale = Math.tan(Math.PI * (camera.fieldOfView * 0.5) / 180);
     const width = gl.canvas.clientWidth;
@@ -2046,7 +2099,6 @@ function setupScene(gl, scene, uniforms) {
     uniforms.height(height);
     uniforms.scale(scale);
     uniforms.width(width);
-    console.log(uniforms);
     materials.forEach((m, i) => {
         uniforms.materials[i].colourOrAlbedo(m.colour);
         uniforms.materials[i].ambient(m.ambient);
@@ -2055,23 +2107,51 @@ function setupScene(gl, scene, uniforms) {
         // u.materials[i].refraction(m.refraction);
         uniforms.materials[i].isTranslucent(m.isTranslucent);
     });
-    spheres.forEach((s, i) => {
-        uniforms.spheres[i].radius(s.radius);
-        uniforms.spheres[i].material(s.material);
-        uniforms.spheres[i].point(s.point);
-    });
     lights.forEach((l, i) => {
         uniforms.pointLights[i].point(l);
     });
 }
-function setupDataTextures(gl, scene, uniforms) {
+//
+// function that creates and binds a data texture
+function setupGenericDataTexture(gl, uniforms, encoding, unit) {
+    const texture = createDataTexture(gl, encoding.width, encoding.height, encoding.data, unit);
+    uniforms[encoding.targetUniformStruct].length(encoding.length);
+    uniforms[encoding.targetUniformStruct].size(encoding.size);
+    uniforms[encoding.targetUniformSampler](texture, unit);
+    return texture;
+}
+function updateGenericDataTexture(gl, uniforms, encoding, texture, unit) {
+    const { data, height, width } = encoding;
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    uniforms[encoding.targetUniformStruct].length(encoding.length);
+    uniforms[encoding.targetUniformStruct].size(encoding.size);
+    uniforms[encoding.targetUniformSampler](texture, unit);
+    return texture;
+}
+function setupSpheres(gl, scene, uniforms, unit) {
+    const spheres = encodeSpheres(scene);
+    return setupGenericDataTexture(gl, uniforms, spheres, unit);
+}
+function updateSpheres(gl, scene, uniforms, texture, unit) {
+    const spheres = encodeSpheres(scene);
+    return updateGenericDataTexture(gl, uniforms, spheres, texture, unit);
+}
+function setupTriangles(gl, scene, uniforms, unit) {
     const triangles = encodeTriangles(scene);
-    const triangleTexture = createDataTexture(gl, triangles.width, 1, triangles.data);
-    uniforms.triangles.length(triangles.length);
-    uniforms.triangles.size(triangles.size);
-    uniforms.trianglesData(triangleTexture, 0);
+    return setupGenericDataTexture(gl, uniforms, triangles, unit);
+}
+function updateTriangles(gl, scene, uniforms, texture, unit) {
+    const triangles = encodeTriangles(scene);
+    return updateGenericDataTexture(gl, uniforms, triangles, texture, unit);
+}
+function setupDataTextures(gl, scene, uniforms) {
+    const spheres = setupSpheres(gl, scene, uniforms, 1);
+    const triangles = setupTriangles(gl, scene, uniforms, 3);
     return {
-        triangles: triangleTexture,
+        spheres,
+        triangles,
     };
 }
 // ## Shader Configuration
@@ -2112,6 +2192,10 @@ function getShaderConfiguration(scene) {
         lightCount: scene.lights.length,
         // how many materials are in the scene?
         materialCount: scene.materials.length,
+        // we will be packing floats into 8 bit unsigned integer quads (RGBA) and we
+        // will want a mechanism for preserving fractions, we can do so by multiplying
+        // or dividing by a factor
+        packedFloatMultiplier: PACKED_FLOAT_MULTIPLIER + '.0',
         // phongSpecular is a variable in our Blinn Phong (old school) system
         // that helps us control specular (shiny) lighting
         // it's a string
@@ -2673,7 +2757,7 @@ function getVertexSource() {
 // each pixel
 function getFragmentSource(config) {
     // for brevity's sake break out the config values
-    const { aa, acceleration, bg, defaultF0, epsilon, infinity, lightCount, materialCount, phongSpecularExp, shadingModel, sphereCount, triangleCount, } = config;
+    const { aa, acceleration, bg, defaultF0, epsilon, infinity, lightCount, materialCount, packedFloatMultiplier, phongSpecularExp, shadingModel, sphereCount, triangleCount, } = config;
     let shadingFragment;
     let shadingDeclarations;
     if (shadingModel === 0) {
@@ -2717,8 +2801,10 @@ uniform float width;
         //
         `
 uniform Material materials[${materialCount}];
-uniform Sphere spheres[${sphereCount}];
 uniform PointLight pointLights[${lightCount}];
+
+uniform sampler2D spheresData;
+uniform TextureDataStructure spheres;
 
 uniform sampler2D trianglesData;
 uniform TextureDataStructure triangles;
@@ -2737,6 +2823,7 @@ bool isLightVisible(vec3 pt, vec3 light, vec3 normal);
 vec3 primaryRay(float xo, float yo);
 Material getMaterial(int index);
 Triangle getTriangle(int index);
+Sphere getSphere(int index);
 ` +
         getShaderUtilityDeclarations() +
         shadingDeclarations +
@@ -2894,7 +2981,7 @@ SphereDistance intersectSpheres(Ray ray, bool useAnyHit) {
         -1.0,
         0));
     for (int i = 0; i < ${sphereCount}; i += 1) {
-        Sphere s = spheres[i];
+        Sphere s = getSphere(i);
         float dist = sphereIntersection(s, ray);
         if (dist >= 0.0) {
             // we're temporarily hacking in an object that casts no shadow 
@@ -3070,33 +3157,52 @@ Triangle getTriangle(int index) {
     float len = float(triangles.size * triangles.length);
 
     vec3 a = vec3(
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 0, len)), false),
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 1, len)), false),
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 2, len)), false)
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 0, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 1, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 2, len)), false) / ${packedFloatMultiplier}
     );
 
     vec3 b = vec3(
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 3, len)), false),
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 4, len)), false),
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 5, len)), false)
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 3, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 4, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 5, len)), false) / ${packedFloatMultiplier}
     );
 
     vec3 c = vec3(
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 6, len)), false),
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 7, len)), false),
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 8, len)), false)
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 6, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 7, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 8, len)), false) / ${packedFloatMultiplier}
     );
 
     vec3 normal = vec3(
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 9, len)), false),
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 10, len)), false),
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 11, len)), false)
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 9, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 10, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 11, len)), false) / ${packedFloatMultiplier}
     );
 
     int material = int(fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 12, len)), false));
 
     return Triangle(a, b, c, normal, material);
 }
+` +
+        // We'll want a function for fetching spheres
+        `
+Sphere getSphere(int index) {
+    int expandedIndex = index * spheres.size;
+    float len = float(spheres.size * spheres.length);
+
+    vec3 centre = vec3(
+        fourByteToFloat(texture2D(spheresData, indexToCoord(expandedIndex + 0, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(spheresData, indexToCoord(expandedIndex + 1, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(spheresData, indexToCoord(expandedIndex + 2, len)), false) / ${packedFloatMultiplier}
+    );
+
+    float radius = fourByteToFloat(texture2D(spheresData, indexToCoord(expandedIndex + 3, len)), false) / ${packedFloatMultiplier};
+    int material = int(fourByteToFloat(texture2D(spheresData, indexToCoord(expandedIndex + 4, len)), false));
+
+    return Sphere(centre, radius, material);
+}` +
+        `
 `;
 }
 // ## Utility Functions
@@ -3194,9 +3300,9 @@ function getUniformSetters(gl, program, desc) {
                 return (value) => gl.uniformMatrix4fv(loc, false, value);
             case 'sampler2D':
                 return (texture, unit) => {
-                    gl.activeTexture(gl[`TEXTURE${unit}`]);
-                    gl.bindTexture(gl.TEXTURE_2D, texture);
                     gl.uniform1i(loc, unit);
+                    gl.activeTexture(gl.TEXTURE0 + unit);
+                    gl.bindTexture(gl.TEXTURE_2D, texture);
                 };
             case 'vec3':
                 return (value) => setVec3(loc, value);
@@ -3289,6 +3395,8 @@ function glslAccessor(type, uniformName, functionName, length, defaultElement = 
 //
 // we're going to be packing data into WebGL textures and that's going to require
 // us to encode JavaScript floats into 4x unsigned byte RGBA values
+//
+// NOTE: This does not preserve fractions!
 function fourByteFromFloat(float, bytes = new Uint8Array(4), unsigned = false) {
     const positiveFloat = float < 0 ? float * -1 : float;
     const bit0 = positiveFloat % 256;

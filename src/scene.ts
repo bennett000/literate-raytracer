@@ -238,34 +238,53 @@ function getScene(sphereCount = 57, minOrbit = 3) {
 }
 
 //
+// <a name="insertPointInto"></a>
+// ## insertPointInto
+//
+// helper function for our functions that will encode things for the GPU
+function insertPointInto(data: Uint8Array) {
+  return (point: Matrix3_1, index: number) => {
+    const x = fourByteFromFloat(point[0] * PACKED_FLOAT_MULTIPLIER);
+    const y = fourByteFromFloat(point[1] * PACKED_FLOAT_MULTIPLIER);
+    const z = fourByteFromFloat(point[2] * PACKED_FLOAT_MULTIPLIER);
+    data[index + 0] = x[0];
+    data[index + 1] = x[1];
+    data[index + 2] = x[2];
+    data[index + 3] = x[3];
+    data[index + 4] = y[0];
+    data[index + 5] = y[1];
+    data[index + 6] = y[2];
+    data[index + 7] = y[3];
+    data[index + 8] = z[0];
+    data[index + 9] = z[1];
+    data[index + 10] = z[2];
+    data[index + 11] = z[3];
+  };
+}
+
+interface TextureDataStructureEncoding {
+  data: Uint8Array;
+  height: number;
+  length: number;
+  size: number;
+  targetUniformSampler: string;
+  targetUniformStruct: string;
+  width: number;
+}
+
+//
 // <a name="encodeTriangle"></a>
 // ## encodeTriangle
-function encodeTriangles(scene: Scene) {
+function encodeTriangles(scene: Scene): TextureDataStructureEncoding {
     const size = /* a */ 3 + /* b */ 3 + /* c */ + 3 + /* normal */ + 3 + /* material */ + 1;
     const sizeRaw = size * 4;
     const length = scene.triangles.length;
     const width = length * size;
     const lengthRaw = width * 4;
     const data = new Uint8Array(lengthRaw);
+    const insertPoint = insertPointInto(data);
     scene.triangleNormals((normal, t, i) => {
       const pointer = i * sizeRaw;
-      const insertPoint = (point: Matrix3_1, index: number) => {
-        const x = fourByteFromFloat(point[0]);
-        const y = fourByteFromFloat(point[1]);
-        const z = fourByteFromFloat(point[2]);
-        data[index + 0] = x[0];
-        data[index + 1] = x[1];
-        data[index + 2] = x[2];
-        data[index + 3] = x[3];
-        data[index + 4] = y[0];
-        data[index + 5] = y[1];
-        data[index + 6] = y[2];
-        data[index + 7] = y[3];
-        data[index + 8] = z[0];
-        data[index + 9] = z[1];
-        data[index + 10] = z[2];
-        data[index + 11] = z[3];
-      };
       insertPoint(t.points[0], 0 + pointer);
       insertPoint(t.points[1], 12 + pointer);
       insertPoint(t.points[2], 24 + pointer);
@@ -279,11 +298,53 @@ function encodeTriangles(scene: Scene) {
 
     return {
       data,
+      height: 1,
       length,
       size,
+      targetUniformSampler: 'trianglesData',
+      targetUniformStruct: 'triangles',
       width,
     };
 }
+
+//
+// <a name="encodeSphere"></a>
+// ## encodeSphere
+function encodeSpheres(scene: Scene): TextureDataStructureEncoding {
+    const size = /* centre */ 3 +  /* radius */ + 1 + /* material */ + 1;
+    const sizeRaw = size * 4;
+    const length = scene.spheres.length;
+    const width = length * size;
+    const lengthRaw = width * 4;
+    const data = new Uint8Array(lengthRaw);
+
+    const insertPoint = insertPointInto(data);
+    scene.spheres.forEach((sphere, i) => {
+      const pointer = i * sizeRaw;
+      insertPoint(sphere.point, 0 + pointer);
+      const radius = fourByteFromFloat(sphere.radius * PACKED_FLOAT_MULTIPLIER);
+      data[12 + pointer] = radius[0];
+      data[13 + pointer] = radius[1];
+      data[14 + pointer] = radius[2];
+      data[15 + pointer] = radius[3];
+      const material = fourByteFromFloat(sphere.material);
+      data[16 + pointer] = material[0];
+      data[17 + pointer] = material[1];
+      data[18 + pointer] = material[2];
+      data[19 + pointer] = material[3];
+    }, false);
+
+    return {
+      data,
+      height: 1,
+      length,
+      size,
+      targetUniformSampler: 'spheresData',
+      targetUniformStruct: 'spheres',
+      width,
+    };
+}
+
 
 //
 // <a name="createDataTexture"></a>
@@ -291,9 +352,10 @@ function encodeTriangles(scene: Scene) {
 //
 // we need a way of giving the GPU lots of data about things like verticies, bounding boxes
 // etc.  We can pack this info into a "data texture"
-function createDataTexture(gl: WebGLRenderingContext, width: number, height: number, data: Uint8Array) {
+function createDataTexture(gl: WebGLRenderingContext, width: number, height: number, data: Uint8Array, unit: number) {
     const texture = gl.createTexture();
     throwIfFalsey(texture, 'could not create data texture');
+    gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
@@ -308,7 +370,7 @@ function createDataTexture(gl: WebGLRenderingContext, width: number, height: num
 // <a name="setupScene"></a>
 // ## setupScene
 function setupScene(gl: WebGLRenderingContext, scene: Scene, uniforms: any) {
-    const { camera, materials, spheres, lights } = scene;
+    const { camera, materials, lights } = scene;
 
     const cameraMatrix = 
     zRotate4_4(yRotate4_4(xRotate4_4(translate4_4(identity4_4(), camera.point[0], camera.point[1], camera.point[2]), camera.rotation[0]), camera.rotation[1]), camera.rotation[2]);
@@ -332,7 +394,6 @@ function setupScene(gl: WebGLRenderingContext, scene: Scene, uniforms: any) {
     uniforms.scale(scale);
     uniforms.width(width);
 
-    console.log(uniforms);
     materials.forEach((m, i) => {
         uniforms.materials[i].colourOrAlbedo(m.colour);
         uniforms.materials[i].ambient(m.ambient);
@@ -342,26 +403,62 @@ function setupScene(gl: WebGLRenderingContext, scene: Scene, uniforms: any) {
         uniforms.materials[i].isTranslucent(m.isTranslucent);
     });
 
-    spheres.forEach((s, i) => {
-        uniforms.spheres[i].radius(s.radius);
-        uniforms.spheres[i].material(s.material);
-        uniforms.spheres[i].point(s.point);
-    });
-
     lights.forEach((l, i) => {
         uniforms.pointLights[i].point(l);
     });
 }
 
-function setupDataTextures(gl: WebGLRenderingContext, scene: Scene, uniforms: any) {
-    const triangles = encodeTriangles(scene);
-    const triangleTexture = createDataTexture(gl, triangles.width, 1, triangles.data);
+//
+// function that creates and binds a data texture
+function setupGenericDataTexture(gl: WebGLRenderingContext, uniforms: any, encoding: TextureDataStructureEncoding, unit: number) {
+    const texture = createDataTexture(gl, encoding.width, encoding.height, encoding.data, unit);
 
-    uniforms.triangles.length(triangles.length);
-    uniforms.triangles.size(triangles.size);
-    uniforms.trianglesData(triangleTexture, 0);
+    uniforms[encoding.targetUniformStruct].length(encoding.length);
+    uniforms[encoding.targetUniformStruct].size(encoding.size);
+    uniforms[encoding.targetUniformSampler](texture, unit);
+
+    return texture;
+}
+
+function updateGenericDataTexture(gl: WebGLRenderingContext, uniforms: any, encoding: TextureDataStructureEncoding, texture: WebGLTexture, unit: number) {
+  const { data, height, width } = encoding;
+  gl.activeTexture(gl.TEXTURE0 + unit);
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+
+  uniforms[encoding.targetUniformStruct].length(encoding.length);
+  uniforms[encoding.targetUniformStruct].size(encoding.size);
+  uniforms[encoding.targetUniformSampler](texture, unit);
+
+  return texture;
+}
+
+function setupSpheres(gl: WebGLRenderingContext, scene: Scene, uniforms: any, unit: number) {
+    const spheres = encodeSpheres(scene);
+    return setupGenericDataTexture(gl, uniforms, spheres, unit);
+}
+
+function updateSpheres(gl: WebGLRenderingContext, scene: Scene, uniforms: any, texture: WebGLTexture, unit: number) {
+    const spheres = encodeSpheres(scene);
+    return updateGenericDataTexture(gl, uniforms, spheres, texture, unit);
+}
+
+function setupTriangles(gl: WebGLRenderingContext, scene: Scene, uniforms: any, unit: number) {
+    const triangles = encodeTriangles(scene);
+    return setupGenericDataTexture(gl, uniforms, triangles, unit);
+}
+
+function updateTriangles(gl: WebGLRenderingContext, scene: Scene, uniforms: any, texture: WebGLTexture, unit: number) {
+    const triangles = encodeTriangles(scene);
+    return updateGenericDataTexture(gl, uniforms, triangles, texture, unit);
+}
+
+function setupDataTextures(gl: WebGLRenderingContext, scene: Scene, uniforms: any) {
+  const spheres = setupSpheres(gl, scene, uniforms, 1);
+  const triangles = setupTriangles(gl, scene, uniforms, 3);
 
     return {
-      triangles: triangleTexture,
+      spheres,
+      triangles,
     };
 }

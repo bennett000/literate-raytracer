@@ -115,9 +115,9 @@ function getUniformSetters(gl: WebGLRenderingContext, program: WebGLProgram, des
                 return (value: Matrix4_4) => gl.uniformMatrix4fv(loc, false, value);
             case 'sampler2D':
                 return (texture: WebGLTexture, unit: number) => {
-                    gl.activeTexture((gl as any)[`TEXTURE${unit}`]);
-                    gl.bindTexture(gl.TEXTURE_2D, texture);
                     gl.uniform1i(loc, unit);
+                    gl.activeTexture(gl.TEXTURE0 + unit);
+                    gl.bindTexture(gl.TEXTURE_2D, texture);
                 };
             case 'vec3':
                 return (value: Matrix3_1) => setVec3(loc, value);
@@ -224,6 +224,8 @@ function glslAccessor(type: string, uniformName: string, functionName: string, l
 //
 // we're going to be packing data into WebGL textures and that's going to require
 // us to encode JavaScript floats into 4x unsigned byte RGBA values
+//
+// NOTE: This does not preserve fractions!
 function fourByteFromFloat(
   float: number, bytes = new Uint8Array(4), unsigned = false
 ) {

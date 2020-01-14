@@ -218,6 +218,7 @@ function draw(gl: WebGLRenderingContext, context: ProgramContext, canvas: HTMLCa
   // if the screen resized, re-initatlize the scene
   if (resize(canvas)) {
     setupScene(gl, g_scene, g_glState.uniforms);
+    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
   }
   // clear the screen
   gl.clear(gl.COLOR_BUFFER_BIT);
@@ -306,21 +307,20 @@ function getUniformDescription(shaderConfig: ConfigShader): UniformDescription[]
     {
       children: [
         {
-          name: 'material',
+          name: 'length',
           type: 'int',
         },
         {
-          name: 'point',
-          type: 'vec3',
-        },
-        {
-          name: 'radius',
-          type: 'float',
+          name: 'size',
+          type: 'int',
         },
       ],
-      length: shaderConfig.sphereCount,
       name: 'spheres',
       type: 'struct',
+    },
+    {
+      name: 'spheresData',
+      type: 'sampler2D',
     },
     {
       children: [

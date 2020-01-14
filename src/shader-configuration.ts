@@ -36,6 +36,10 @@ function getShaderConfiguration(scene: Scene) {
     lightCount: scene.lights.length,
     // how many materials are in the scene?
     materialCount: scene.materials.length,
+    // we will be packing floats into 8 bit unsigned integer quads (RGBA) and we
+    // will want a mechanism for preserving fractions, we can do so by multiplying
+    // or dividing by a factor
+    packedFloatMultiplier: PACKED_FLOAT_MULTIPLIER + '.0',
     // phongSpecular is a variable in our Blinn Phong (old school) system
     // that helps us control specular (shiny) lighting
     // it's a string

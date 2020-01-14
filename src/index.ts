@@ -87,6 +87,12 @@ const g_floorPlaneSize = 25;
 type Scene = typeof g_scene;
 const g_scene = getScene();
 
+// We're going to be passing data into the GPU using textures, this is going to
+// require some tricks/hacks, one of those is encoding floats in RGBA quads...
+// our conversion is a simple integer encoding and we'll simulate decimals with
+// a multiplier
+const PACKED_FLOAT_MULTIPLIER = 10000;
+
 
 // We're going to want to tweak a lot of different variables, let's put all of our
 // configuration [in on place for easy updates](shader-configuration.html "Centralized Config").
@@ -304,10 +310,10 @@ const animate = (time: number) => {
             sphere.point = [state.matrix[12], state.matrix[13], state.matrix[14]];
             g_planetStates[i] = state;
         }
-
-        g_glState.uniforms.spheres[i].point(sphere.point);
     });
 
+    updateSpheres(g_glState.gl, g_scene, g_glState.uniforms, g_glState.textures.spheres, 1);
+    // updateTriangles(g_glState.gl, g_scene, g_glState.uniforms, g_glState.textures.triangles, 3);
     draw(g_glState.gl, g_glState.ctx, g_canvas);
     requestAnimationFrame(animate);
 };

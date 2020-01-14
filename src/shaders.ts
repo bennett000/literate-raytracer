@@ -51,7 +51,7 @@ function getFragmentSource(config: ConfigShader) {
   // for brevity's sake break out the config values
   const { 
     aa, acceleration, bg, defaultF0, epsilon, infinity,
-    lightCount, materialCount, 
+    lightCount, materialCount, packedFloatMultiplier, 
     phongSpecularExp, 
     shadingModel, sphereCount, triangleCount,
   } = config;
@@ -103,8 +103,10 @@ uniform float width;
 //
 `
 uniform Material materials[${materialCount}];
-uniform Sphere spheres[${sphereCount}];
 uniform PointLight pointLights[${lightCount}];
+
+uniform sampler2D spheresData;
+uniform TextureDataStructure spheres;
 
 uniform sampler2D trianglesData;
 uniform TextureDataStructure triangles;
@@ -124,6 +126,7 @@ bool isLightVisible(vec3 pt, vec3 light, vec3 normal);
 vec3 primaryRay(float xo, float yo);
 Material getMaterial(int index);
 Triangle getTriangle(int index);
+Sphere getSphere(int index);
 ` +
 getShaderUtilityDeclarations() +
 shadingDeclarations +
@@ -288,7 +291,7 @@ SphereDistance intersectSpheres(Ray ray, bool useAnyHit) {
         -1.0,
         0));
     for (int i = 0; i < ${sphereCount}; i += 1) {
-        Sphere s = spheres[i];
+        Sphere s = getSphere(i);
         float dist = sphereIntersection(s, ray);
         if (dist >= 0.0) {
             // we're temporarily hacking in an object that casts no shadow 
@@ -474,33 +477,54 @@ Triangle getTriangle(int index) {
     float len = float(triangles.size * triangles.length);
 
     vec3 a = vec3(
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 0, len)), false),
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 1, len)), false),
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 2, len)), false)
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 0, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 1, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 2, len)), false) / ${packedFloatMultiplier}
     );
 
     vec3 b = vec3(
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 3, len)), false),
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 4, len)), false),
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 5, len)), false)
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 3, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 4, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 5, len)), false) / ${packedFloatMultiplier}
     );
 
     vec3 c = vec3(
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 6, len)), false),
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 7, len)), false),
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 8, len)), false)
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 6, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 7, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 8, len)), false) / ${packedFloatMultiplier}
     );
 
     vec3 normal = vec3(
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 9, len)), false),
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 10, len)), false),
-        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 11, len)), false)
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 9, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 10, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 11, len)), false) / ${packedFloatMultiplier}
     );
 
     int material = int(fourByteToFloat(texture2D(trianglesData, indexToCoord(expandedIndex + 12, len)), false));
 
     return Triangle(a, b, c, normal, material);
 }
+` +
+
+// We'll want a function for fetching spheres
+`
+Sphere getSphere(int index) {
+    int expandedIndex = index * spheres.size;
+    float len = float(spheres.size * spheres.length);
+
+    vec3 centre = vec3(
+        fourByteToFloat(texture2D(spheresData, indexToCoord(expandedIndex + 0, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(spheresData, indexToCoord(expandedIndex + 1, len)), false) / ${packedFloatMultiplier},
+        fourByteToFloat(texture2D(spheresData, indexToCoord(expandedIndex + 2, len)), false) / ${packedFloatMultiplier}
+    );
+
+    float radius = fourByteToFloat(texture2D(spheresData, indexToCoord(expandedIndex + 3, len)), false) / ${packedFloatMultiplier};
+    int material = int(fourByteToFloat(texture2D(spheresData, indexToCoord(expandedIndex + 4, len)), false));
+
+    return Sphere(centre, radius, material);
+}` +
+
+`
 `;
 
 }
