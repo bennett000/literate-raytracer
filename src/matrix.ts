@@ -788,3 +788,7 @@ type Matrix3_3 = [
 ];
 type Matrix4_1 = [number, number, number, number];
 type Matrix4_4 = Float32Array;
+
+function dot3_1(a: Matrix3_1, b: Matrix3_1): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}

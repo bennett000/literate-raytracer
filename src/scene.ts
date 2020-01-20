@@ -398,6 +398,22 @@ function encodeMaterials(scene: Scene): TextureDataStructureEncoding {
     };
 }
 
+//
+// <a name="encodeExtents"></a>
+// ### encodeExtents
+// function encodeExtents(scene: Scene): TextureDataStructureEncoding {
+//   const size = /* numPlaneSetNormals */ 7 * 2;
+//   const sizeRaw = size * 4;
+//   const length = scene.spheres.length;
+//   const width = length * size;
+//   const lengthRaw = width * 4;
+//   const data = new Uint8Array(lengthRaw);
+
+//   data[12 + pointer] = ambient[0];
+//   data[13 + pointer] = ambient[1];
+//   data[14 + pointer] = ambient[2];
+//   data[15 + pointer] = ambient[3];
+// }
 
 //
 // <a name="createDataTexture"></a>

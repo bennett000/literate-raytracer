@@ -36,6 +36,8 @@ function getShaderConfiguration(scene: Scene) {
     lightCount: scene.lights.length,
     // how many materials are in the scene?
     materialCount: scene.materials.length,
+    // how many octree nodes can we visit?
+    octreeNodeIterationMax: Math.ceil((scene.triangles.length + scene.spheres.length) / 2),
     // we will be packing floats into 8 bit unsigned integer quads (RGBA) and we
     // will want a mechanism for preserving fractions, we can do so by multiplying
     // or dividing by a factor

@@ -51,7 +51,7 @@ function getFragmentSource(config: ConfigShader) {
   // for brevity's sake break out the config values
   const { 
     aa, acceleration, bg, defaultF0, epsilon, infinity,
-    lightCount, materialCount, packedFloatMultiplier, 
+    lightCount, packedFloatMultiplier, 
     phongSpecularExp, 
     shadingModel, sphereCount, triangleCount,
   } = config;
@@ -104,8 +104,14 @@ uniform float width;
 `
 uniform PointLight pointLights[${lightCount}];
 
+uniform sampler2D extentsData ;
+uniform TextureDataStructure extents;
+
 uniform sampler2D materialsData ;
 uniform TextureDataStructure materials;
+
+uniform sampler2D octreeData ;
+uniform TextureDataStructure octree;
 
 uniform sampler2D spheresData;
 uniform TextureDataStructure spheres;
@@ -129,6 +135,7 @@ vec3 primaryRay(float xo, float yo);
 Material getMaterial(int index);
 Triangle getTriangle(int index);
 Sphere getSphere(int index);
+float getExtents(int id, int plane, int index);
 ` +
 getShaderUtilityDeclarations() +
 shadingDeclarations +
@@ -413,16 +420,37 @@ float sphereIntersection(Sphere sphere, Ray ray) {
 // ray "extents" intersection
 
 `
-// ExtentsIntersect extentsIntersection() {
-//     for (int i = 0; i < ${acceleration.numPlaneSetNormals}; i += 1) {
-//         float tNearExtents = (d[i][0] - precomputedNumerator[i]) / precomputedDenominator[i];
-//     float tFarExtents = (d[i][1] - precomputedNumerator[i]) / precomputedDenominator[i];
-//     if (precomputedDenominator[i] < 0) std::swap(tNearExtents, tFarExtents);
-//     if (tNearExtents > tNear) tNear = tNearExtents, planeIndex = i;
-//     if (tFarExtents < tFar) tFar = tFarExtents;
-//     if (tNear > tFar) return false;
-//     }
-// }
+ExtentsIntersect extentsIntersection(
+    int extentId,
+    float preComputedNumerator[${acceleration.numPlaneSetNormals}],
+    float preComputedDenominator[${acceleration.numPlaneSetNormals}],
+    float tNear,
+    float tFar,
+    int planeIndex
+) {
+    for (int i = 0; i < ${acceleration.numPlaneSetNormals}; i += 1) {
+        float di0 = getExtents(extentId, i, 0);
+        float di1 = getExtents(extentId, i, 1);
+        float tNearExtents = (di0 - preComputedNumerator[i]) / preComputedDenominator[i];
+        float tFarExtents = (di1 - preComputedNumerator[i]) / preComputedDenominator[i];
+        if (preComputedDenominator[i] < 0.0) {
+            float t = tNearExtents;
+            tNearExtents = tFarExtents;
+            tFarExtents = t;
+        }
+        if (tNearExtents > tNear) {
+            tNear = tNearExtents;
+            planeIndex = i;
+        }
+        if (tFarExtents < tFar) {
+            tFar = tFarExtents;
+        }
+        if (tNear > tFar) {
+            return ExtentsIntersect(-1.0, -1.0, -1);
+        }
+    }
+    return ExtentsIntersect(tNear, tFar, planeIndex);
+}
 ` +
 
 // ray bounding volume hierarchy intersection
@@ -547,6 +575,13 @@ Material getMaterial(int index) {
 
     return Material(colourOrAlbedo, ambient, diffuseOrRough, specularOrMetal, refraction, isTranslucent);
 }` +
+
+// We'll want a function for getting extents information
+`
+float getExtents(int id, int plane, int index) {
+    return 0.0;
+}
+` +
 
 `
 `;

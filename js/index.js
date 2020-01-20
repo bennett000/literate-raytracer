@@ -1,11 +1,479 @@
 "use strict";
+describe('accelerator functions', () => {
+    describe('TextureDataStructureElement', () => {
+        let data = [];
+        class Foo extends TextureDataStructureElement {
+            static create() {
+                return new Foo();
+            }
+            // must initialize, usually the constructor would take data as an argument
+            constructor() {
+                super(data);
+                // get the index
+                this._index = data.push(0);
+                for (let i = 1; i < this.size; i += 1) {
+                    data.push(0);
+                }
+            }
+            get size() {
+                return 5 * 4;
+            }
+        }
+        let example = Foo.create();
+        beforeEach(() => {
+            example = Foo.create();
+        });
+        it('sets the first value', () => {
+            example.setFloat(5, 0);
+            expect(example.getFloat(0)).toBe(5);
+        });
+        it('sets the second value', () => {
+            example.setFloat(3, 1);
+            expect(example.getFloat(1)).toBe(3);
+        });
+        it('sets the fifth value', () => {
+            example.setFloat(1, 4);
+            expect(example.getFloat(4)).toBe(1);
+        });
+        it('sets multiple values', () => {
+            example.setFloat(22, 3);
+            example.setFloat(20, 0);
+            expect(example.getFloat(3)).toBe(22);
+            expect(example.getFloat(0)).toBe(20);
+        });
+    });
+    describe('extents', () => {
+        it('starts with a null (-1) pointer to a mesh', () => {
+            const data = [];
+            const e = Extents.create(data);
+            expect(e.getInt(0)).toBe(-1);
+        });
+        it('starts with +/- its min/max size', () => {
+            const data = [];
+            const e = Extents.create(data);
+            for (let i = 0; i < NUM_PLANE_SET_NORMALS; i += 1) {
+                expect(Math.floor(e.getPlaneExtent(i, 0))).toBe(Math.floor(MAX_GL_INT / PACKED_FLOAT_MULTIPLIER));
+                expect(Math.floor(e.getPlaneExtent(i, 1))).toBe(Math.floor(MIN_GL_INT / PACKED_FLOAT_MULTIPLIER));
+            }
+        });
+        it('axis align bounds a single triangle', () => {
+            const planeSetNormals = getPlaneSetNormals();
+            let data = [];
+            const sceneExtents = Extents.create(data);
+            const triangles = [[
+                    [1, 1, 0],
+                    [-1, 0, 0],
+                    [1, 0, 0],
+                ]];
+            triangles.forEach((verts) => {
+                const extent = Extents.create(data);
+                // for each of the seven extent planes
+                for (let plane = 0; plane < NUM_PLANE_SET_NORMALS; plane += 1) {
+                    // and for each of the triangle's vertecies
+                    verts.forEach((vertex) => {
+                        // create the extents
+                        const d = dot3_1(vertex, planeSetNormals[plane]);
+                        if (d < extent.getPlaneExtent(plane, 0)) {
+                            extent.setPlaneExtent(d, plane, 0);
+                        }
+                        if (d > extent.getPlaneExtent(plane, 1)) {
+                            extent.setPlaneExtent(d, plane, 1);
+                        }
+                    });
+                }
+                // grow the scene
+                sceneExtents.extendBy(extent);
+            });
+            // finally test the extents
+            // x axis min
+            expect(sceneExtents.getPlaneExtent(0, 0)).toBe(-1);
+            // x axis max
+            expect(sceneExtents.getPlaneExtent(0, 1)).toBe(1);
+            // y axis min
+            expect(sceneExtents.getPlaneExtent(1, 0)).toBe(0);
+            // y axis max
+            expect(sceneExtents.getPlaneExtent(1, 1)).toBe(1);
+            // z axis min
+            expect(sceneExtents.getPlaneExtent(2, 0)).toBe(0);
+            // z axis max
+            expect(sceneExtents.getPlaneExtent(2, 1)).toBe(0);
+        });
+        it('axis align bounds two triangles', () => {
+            const planeSetNormals = getPlaneSetNormals();
+            let data = [];
+            const sceneExtents = Extents.create(data);
+            const triangles = [[
+                    [1, 1, 0],
+                    [-1, 0, 0],
+                    [1, 0, 0],
+                ], [
+                    [1, -1, -1],
+                    [1, 1, 0],
+                    [1, -1, 0],
+                ]];
+            triangles.forEach((verts, i) => {
+                const extent = Extents.create(data);
+                // for each of the seven extent planes
+                for (let plane = 0; plane < NUM_PLANE_SET_NORMALS; plane += 1) {
+                    // and for each of the triangle's vertecies
+                    verts.forEach((vertex) => {
+                        // create the extents
+                        const d = dot3_1(vertex, planeSetNormals[plane]);
+                        if (d < extent.getPlaneExtent(plane, 0)) {
+                            extent.setPlaneExtent(d, plane, 0);
+                        }
+                        if (d > extent.getPlaneExtent(plane, 1)) {
+                            extent.setPlaneExtent(d, plane, 1);
+                        }
+                    });
+                }
+                // set the mesh
+                extent.mesh = i;
+                // grow the scene
+                sceneExtents.extendBy(extent);
+            });
+            // finally test the extents
+            // x axis min
+            expect(sceneExtents.getPlaneExtent(0, 0)).toBe(-1);
+            // x axis max
+            expect(sceneExtents.getPlaneExtent(0, 1)).toBe(1);
+            // y axis min
+            expect(sceneExtents.getPlaneExtent(1, 0)).toBe(-1);
+            // y axis max
+            expect(sceneExtents.getPlaneExtent(1, 1)).toBe(1);
+            // z axis min
+            expect(sceneExtents.getPlaneExtent(2, 0)).toBe(-1);
+            // z axis max
+            expect(sceneExtents.getPlaneExtent(2, 1)).toBe(0);
+        });
+    });
+    describe('octree', () => {
+        const planeSetNormals = getPlaneSetNormals();
+        let extentsData;
+        let sceneExtents;
+        let extentsList = [];
+        let triangles = [];
+        const reset = (t = []) => {
+            extentsData = [];
+            extentsList = [];
+            sceneExtents = Extents.create(extentsData);
+            if (t.length) {
+                triangles = t;
+            }
+            else {
+                triangles = [[
+                        [1, 1, 0],
+                        [-1, 0, 0],
+                        [1, 0, 0],
+                    ], [
+                        [1, 1, -10],
+                        [-1, 0, -10],
+                        [1, 0, -10],
+                    ]];
+            }
+            triangles.forEach((verts, i) => {
+                const extent = Extents.create(extentsData);
+                // for each of the seven extent planes
+                for (let plane = 0; plane < NUM_PLANE_SET_NORMALS; plane += 1) {
+                    // and for each of the triangle's vertecies
+                    verts.forEach((vertex) => {
+                        // create the extents
+                        const d = dot3_1(vertex, planeSetNormals[plane]);
+                        if (d < extent.getPlaneExtent(plane, 0)) {
+                            extent.setPlaneExtent(d, plane, 0);
+                        }
+                        if (d > extent.getPlaneExtent(plane, 1)) {
+                            extent.setPlaneExtent(d, plane, 1);
+                        }
+                    });
+                }
+                // set the mesh
+                extent.mesh = i;
+                // store a reference for later
+                extentsList.push(extent);
+                // grow the scene
+                sceneExtents.extendBy(extent);
+            });
+        };
+        afterEach(() => {
+            Octree.MAX_CONTENTS = 16;
+        });
+        beforeEach(() => {
+            reset();
+        });
+        it('builds for a simple two triangle system', () => {
+            const octree = Octree.create(sceneExtents, extentsData);
+            // insert the extents
+            extentsList.forEach((e) => {
+                octree.insert(e);
+            });
+            // build the tree
+            octree.build();
+            let count = 0;
+            octree.onEach(() => {
+                count += 1;
+            });
+            expect(count).toBe(1);
+        });
+        it('with MAX_CONTENTS = 1 two triangles split the root for three total nodes', () => {
+            Octree.MAX_CONTENTS = 1;
+            const octree = Octree.create(sceneExtents, extentsData);
+            // insert the extents
+            extentsList.forEach((e) => {
+                octree.insert(e);
+            });
+            // build the tree
+            octree.build();
+            let count = 0;
+            octree.onEach(() => {
+                count += 1;
+            });
+            expect(count).toBe(3);
+        });
+        it('with MAX_CONTENTS = 1 eight triangles split the root for nine total nodes', () => {
+            reset([
+                [
+                    [10, 10, 10],
+                    [0, 9, 10],
+                    [10, 9, 10],
+                ], [
+                    [10, 10, -10],
+                    [0, 9, -10],
+                    [10, 9, -10],
+                ], [
+                    [10, -10, 10],
+                    [0, -9, 10],
+                    [10, -9, 10],
+                ], [
+                    [10, -10, -10],
+                    [0, -9, -10],
+                    [10, -9, -10],
+                ], [
+                    [-10, 10, 10],
+                    [-0, 9, 10],
+                    [-10, 9, 10],
+                ], [
+                    [-10, 10, -10],
+                    [-0, 9, -10],
+                    [-10, 9, -10],
+                ], [
+                    [-10, -10, 10],
+                    [-0, -9, 10],
+                    [-10, -9, 10],
+                ], [
+                    [-10, -10, -10],
+                    [-0, -9, -10],
+                    [-10, -9, -10],
+                ],
+            ]);
+            Octree.MAX_CONTENTS = 1;
+            const octree = Octree.create(sceneExtents, extentsData);
+            // insert the extents
+            extentsList.forEach((e) => {
+                octree.insert(e);
+            });
+            // build the tree
+            octree.build();
+            let count = 0;
+            let components = 0;
+            octree.onEach((node) => {
+                count += 1;
+                components += node.extentsListLength();
+            });
+            expect(count).toBe(10);
+            expect(components).toBe(8);
+        });
+    });
+});
 const negInfinity = [-Infinity, -Infinity, -Infinity];
 const posInfinity = [Infinity, Infinity, Infinity];
+const NUM_PLANE_SET_NORMALS = 7;
+// in order to store related data in shared textures/memory we'll want a common
+// and safe way of accessing that data
+//
+// `TextureDataStructureElement` defines the basic interface we'll use to safely
+// access and build our texture memory in JS
+class TextureDataStructureElement {
+    // our class will take an array of numbers and keep it internal
+    // this is our memory
+    constructor(_data) {
+        this._data = _data;
+        // we need to understand our place (address) in memory
+        this._index = -1;
+    }
+    // let's allow others to get our addres and let's make sure we don't accidentially 
+    // change our ddress
+    get index() {
+        return this._index;
+    }
+    checkBounds(index) {
+        if (index > this.size) {
+            throw new RangeError('TextureDataStructureElement: out of bounds ' + index + ' vs ' + this.size);
+        }
+    }
+    // we'll also want to some helpers
+    setFloat(value, index, arr = []) {
+        this.checkBounds(index);
+        fourByteFromFloat(value * PACKED_FLOAT_MULTIPLIER, arr);
+        this._data[this._index + index * 4 + 0] = arr[0];
+        this._data[this._index + index * 4 + 1] = arr[1];
+        this._data[this._index + index * 4 + 2] = arr[2];
+        this._data[this._index + index * 4 + 3] = arr[3];
+    }
+    setInt(value, index, arr = []) {
+        this.checkBounds(index);
+        fourByteFromFloat(value, arr);
+        this._data[this._index + index * 4 + 0] = arr[0];
+        this._data[this._index + index * 4 + 1] = arr[1];
+        this._data[this._index + index * 4 + 2] = arr[2];
+        this._data[this._index + index * 4 + 3] = arr[3];
+    }
+    setUint(value, index, arr = []) {
+        this.checkBounds(index);
+        fourByteFromFloat(value, arr, true);
+        this._data[this._index + index * 4 + 0] = arr[0];
+        this._data[this._index + index * 4 + 1] = arr[1];
+        this._data[this._index + index * 4 + 2] = arr[2];
+        this._data[this._index + index * 4 + 3] = arr[3];
+    }
+    getFloat(index) {
+        this.checkBounds(index);
+        return fourByteToFloat(this._data[this._index + index * 4 + 0], this._data[this._index + index * 4 + 1], this._data[this._index + index * 4 + 2], this._data[this._index + index * 4 + 3]) / PACKED_FLOAT_MULTIPLIER;
+    }
+    getInt(index) {
+        this.checkBounds(index);
+        return fourByteToFloat(this._data[this._index + index * 4 + 0], this._data[this._index + index * 4 + 1], this._data[this._index + index * 4 + 2], this._data[this._index + index * 4 + 3]);
+    }
+    getUint(index) {
+        this.checkBounds(index);
+        return fourByteToFloat(this._data[this._index + index * 4 + 0], this._data[this._index + index * 4 + 1], this._data[this._index + index * 4 + 2], this._data[this._index + index * 4 + 3], true);
+    }
+}
+// we'll use vec3's for vertexes, colours, and normals
+class Vec3 extends TextureDataStructureElement {
+    static create(vec3data, x = 0, y = 0, z = 0) {
+        return new Vec3(vec3data, x, y, z);
+    }
+    static size() { return 3 * 4; }
+    get size() { return Vec3.size(); }
+    get x() {
+        return this.getFloat(0);
+    }
+    set x(v) {
+        this.setFloat(v, 0);
+    }
+    get y() {
+        return this.getFloat(1);
+    }
+    set y(v) {
+        this.setFloat(v, 1);
+    }
+    get z() {
+        return this.getFloat(2);
+    }
+    set z(v) {
+        this.setFloat(v, 2);
+    }
+    constructor(data, x = 0, y = 0, z = 0) {
+        super(data);
+        const x1 = fourByteFromFloat(x * PACKED_FLOAT_MULTIPLIER);
+        const y1 = fourByteFromFloat(y * PACKED_FLOAT_MULTIPLIER);
+        const z1 = fourByteFromFloat(z * PACKED_FLOAT_MULTIPLIER);
+        this._index = data.push(x1[0]) - 1;
+        data.push(x1[1]);
+        data.push(x1[2]);
+        data.push(y1[0]);
+        data.push(y1[1]);
+        data.push(y1[2]);
+        data.push(z1[0]);
+        data.push(z1[1]);
+        data.push(z1[2]);
+    }
+    fromMatrix3_1(m31) {
+        this.x = m31[0];
+        this.y = m31[1];
+        this.z = m31[2];
+    }
+    fromMatrix4_4(m44) {
+        this.x = m44[12];
+        this.y = m44[13];
+        this.z = m44[14];
+    }
+    toMatrix3_1(m31 = [0, 0, 0]) {
+        m31[0] = this.x;
+        m31[1] = this.y;
+        m31[2] = this.z;
+        return m31;
+    }
+}
+// we need triangles for just about everything except perfect spheres
+class Triangle2 extends TextureDataStructureElement {
+    constructor(data, a, b, c, material = -1) {
+        super(data);
+        this.a = a;
+        this.b = b;
+        this.c = c;
+        this._index = data.push(a.index) - 1;
+        data.push(b.index);
+        data.push(c.index);
+        data.push(material);
+    }
+    static create(data, a, b, c, material = -1) {
+        return new Triangle2(data, a, b, c, material);
+    }
+    static size() {
+        return 4 * 4;
+    }
+    get size() { return Triangle2.size(); }
+    get material() {
+        return this._data[this._index + 3];
+    }
+    set material(material) {
+        this._data[this._index + 3] = material;
+    }
+    onEach(callback) {
+        callback(this.a);
+        callback(this.b);
+        callback(this.c);
+    }
+}
+// since spheres are cheap _and_ look better than triangle based alternatives
+// we'll use them too
+class Sphere extends TextureDataStructureElement {
+    constructor(data, centre, radius, material = -1) {
+        super(data);
+        this.centre = centre;
+        this._index = data.push(centre.index) - 1;
+        data.push(radius);
+        data.push(material);
+    }
+    static create(data, centre, radius, material = -1) {
+        return new Sphere(data, centre, radius, material);
+    }
+    static size() {
+        return 3 * 4;
+    }
+    get size() {
+        return Sphere.size();
+    }
+    get material() {
+        return this._data[this._index + 2];
+    }
+    set material(material) {
+        this._data[this._index + 2] = material;
+    }
+    get radius() {
+        return this._data[this._index + 1];
+    }
+    set radius(radius) {
+        this._data[this._index + 1] = radius;
+    }
+}
 class BBox {
     constructor(min = BBox.negInfinity, max = BBox.posInfinity) {
-        this.bounds = [BBox.negInfinity, BBox.posInfinity];
-        this.bounds[0] = min;
-        this.bounds[1] = max;
+        this.bounds = [BBox.posInfinity, BBox.negInfinity];
+        this.bounds[0] = max;
+        this.bounds[1] = min;
     }
     static create() {
         return new BBox();
@@ -47,61 +515,230 @@ class BBox {
 }
 BBox.negInfinity = [-Infinity, -Infinity, -Infinity];
 BBox.posInfinity = [Infinity, Infinity, Infinity];
-class Extents {
-    constructor(numPlaneSetNormals = 7, op = createObjectPool(createMatrix3_1)) {
-        this.numPlaneSetNormals = numPlaneSetNormals;
+class Extents extends TextureDataStructureElement {
+    constructor(data, index = -1, op = createObjectPool(createMatrix3_1)) {
+        super(data);
         this.op = op;
-        this.d = [];
-        for (let i = 0; i < numPlaneSetNormals; ++i) {
-            this.d[i] = [Infinity, -Infinity];
+        if (index >= 0) {
+            this._index = index;
+        }
+        else {
+            this.init(data);
         }
     }
-    static create(numPlaneSetNormals = 7, op = createObjectPool(createMatrix3_1)) {
-        return new Extents(numPlaneSetNormals, op);
+    static create(data, index = -1, op = createObjectPool(createMatrix3_1)) {
+        return new Extents(data, index, op);
+    }
+    static size() {
+        return /* 2x ints */ 8 /* 2x floats per plane */ + NUM_PLANE_SET_NORMALS * 8;
+    }
+    get size() {
+        return Extents.size();
+    }
+    get mesh() {
+        return this.getInt(0);
+    }
+    set mesh(value) {
+        this.setInt(value, 0);
+    }
+    ;
+    get type() {
+        return this.getInt(1);
+    }
+    // 0 sphere, 1 triangle
+    set type(t) {
+        if (t === 1) {
+            this.setInt(1, 1);
+        }
+        else {
+            this.setInt(0, 1);
+        }
+    }
+    init(data) {
+        const mesh = fourByteFromFloat(-1);
+        this._index = data.push(mesh[0]) - 1;
+        data.push(mesh[1]);
+        data.push(mesh[2]);
+        data.push(mesh[3]);
+        // type 0 for sphere
+        // type 1 for triangle
+        data.push(0);
+        data.push(0);
+        data.push(0);
+        data.push(0);
+        for (let i = 0; i < NUM_PLANE_SET_NORMALS; i += 1) {
+            data.push(127);
+            data.push(255);
+            data.push(255);
+            data.push(255);
+            data.push(254);
+            data.push(255);
+            data.push(255);
+            data.push(255);
+        }
     }
     extendBy(e) {
-        for (let i = 0; i < this.numPlaneSetNormals; ++i) {
-            if (e.d[i][0] < this.d[i][0]) {
-                this.d[i][0] = e.d[i][0];
+        for (let i = 0; i < NUM_PLANE_SET_NORMALS; ++i) {
+            const thisMin = this.getPlaneExtent(i, 0);
+            const givenMin = e.getPlaneExtent(i, 0);
+            if (givenMin < thisMin) {
+                this.setPlaneExtent(givenMin, i, 0);
             }
-            if (e.d[i][1] > this.d[i][1]) {
-                this.d[i][1] = e.d[i][1];
+            const thisMax = this.getPlaneExtent(i, 1);
+            const givenMax = e.getPlaneExtent(i, 1);
+            if (givenMax > thisMax) {
+                this.setPlaneExtent(givenMax, i, 1);
             }
         }
+    }
+    // extent 0 for min, 1 for max
+    getPlaneExtent(plane, extent) {
+        return this.getFloat(plane * 2 + extent + 2);
+    }
+    setPlaneExtent(value, plane, extent) {
+        this.setFloat(value, plane * 2 + extent + 2);
     }
     centroid() {
         const ret = this.op.malloc();
-        ret[0] = this.d[0][0] + this.d[0][1] * 0.5;
-        ret[1] = this.d[1][0] + this.d[1][1] * 0.5;
-        ret[2] = this.d[2][0] + this.d[2][1] * 0.5;
+        ret[0] = (this.getPlaneExtent(0, 0) + this.getPlaneExtent(0, 1)) * 0.5;
+        ret[1] = (this.getPlaneExtent(1, 0) + this.getPlaneExtent(1, 1)) * 0.5;
+        ret[2] = (this.getPlaneExtent(2, 0) + this.getPlaneExtent(2, 1)) * 0.5;
         return ret;
     }
 }
-class OctreeNode {
-    constructor() {
-        this.child = [
-            null, null, null, null, null, null, null, null,
-        ];
-        this.isLeaf = true;
-        this.nodeExtents = Extents.create();
-        this.nodeExtentsList = [];
+class OctreeNode extends TextureDataStructureElement {
+    constructor(octreeData, extentsData, index = -1) {
+        super(octreeData);
+        this.extentsData = extentsData;
+        this._extentsListLength = 0;
+        if (index >= 0) {
+            this._index = index;
+            const extentsIndex = this.getInt(10);
+            this.extents = Extents.create(this.extentsData, extentsIndex);
+            // determine length of extent list
+            for (let i = 0; i < Octree.MAX_CONTENTS; i += 1) {
+                const elIndex = this.extentsListElementIndex(i);
+                if (elIndex < 0) {
+                    break;
+                }
+                this._extentsListLength = i + 1;
+            }
+        }
+        else {
+            this.extents = Extents.create(this.extentsData);
+            this.init(octreeData);
+        }
     }
-    static create() {
-        return new OctreeNode();
+    static create(octreeData, extentsData, index = -1) {
+        return new OctreeNode(octreeData, extentsData, index);
+    }
+    static size() {
+        return /* isLeaf int */ 4 /* eight ints per child index */ + 8 * 4
+            /* int index for extents */ + 4 /* index slots for contained extents */ + Octree.MAX_CONTENTS * 4;
+    }
+    get size() {
+        return OctreeNode.size();
+    }
+    get isLeaf() { return this._data[this._index + 3] === 1; }
+    set isLeaf(value) { this._data[this._index + 3] = value === true ? 1 : 0; }
+    init(octreeData) {
+        // default to leaf
+        this._index = octreeData.push(0) - 1;
+        octreeData.push(0);
+        octreeData.push(0);
+        octreeData.push(1);
+        // -1 children
+        for (let i = 0; i < 8; i += 1) {
+            octreeData.push(255);
+            octreeData.push(0);
+            octreeData.push(0);
+            octreeData.push(1);
+        }
+        // node extents
+        const extentsBytes = fourByteFromFloat(this.extents.index);
+        octreeData.push(extentsBytes[0]);
+        octreeData.push(extentsBytes[1]);
+        octreeData.push(extentsBytes[2]);
+        octreeData.push(extentsBytes[3]);
+        // node's contents' extents (-1)
+        for (let i = 0; i < Octree.MAX_CONTENTS; i += 1) {
+            octreeData.push(255);
+            octreeData.push(0);
+            octreeData.push(0);
+            octreeData.push(1);
+        }
+    }
+    getChildIndex(index) {
+        if (index > 7) {
+            throw new RangeError('OctreeNode: get child out of bounds ' + index);
+        }
+        return this.getInt(index + 1);
+    }
+    setChildIndex(value, index) {
+        if (index > 7) {
+            throw new RangeError('OctreeNode: set child out of bounds ' + index);
+        }
+        this.setInt(value, index + 1);
+    }
+    extentsListElementIndex(index) {
+        if (index > Octree.MAX_CONTENTS) {
+            throw new RangeError('OctreeNode: extentListElement out of bounds ' + index);
+        }
+        return this.getInt(10 + index);
+    }
+    extentsListLength() {
+        return this._extentsListLength;
+    }
+    onEach(callback) {
+        for (let i = 0; i < 8; i += 1) {
+            const index = this.getChildIndex(i);
+            if (index < 0) {
+                continue;
+            }
+            const node = OctreeNode.create(this._data, this.extentsData, index);
+            callback(node);
+        }
+    }
+    extentsListEach(callback) {
+        for (let i = 0; i < Octree.MAX_CONTENTS; i += 1) {
+            const elIndex = this.extentsListElementIndex(i);
+            if (elIndex < 0) {
+                break;
+            }
+            callback(Extents.create(this.extentsData, elIndex));
+        }
+    }
+    extentsListPop() {
+        if (this._extentsListLength <= 0) {
+            return null;
+        }
+        const index = this._extentsListLength - 1;
+        const e = Extents.create(this.extentsData, index);
+        this.setInt(-1, index + 10);
+        this._extentsListLength -= 1;
+        return e;
+    }
+    extentsListPush(e) {
+        const nextIndex = this._extentsListLength;
+        this._extentsListLength += 1;
+        this.setInt(e.index, nextIndex + 10);
+        return this._extentsListLength;
     }
 }
 class Octree {
-    constructor(sceneExtents) {
+    constructor(sceneExtents, extentsData, octreeData = []) {
+        this.extentsData = extentsData;
+        this.octreeData = octreeData;
         this.bbox = BBox.create();
-        this.root = OctreeNode.create();
-        const xDiff = sceneExtents.d[0][1] - sceneExtents.d[0][0];
-        const yDiff = sceneExtents.d[1][1] - sceneExtents.d[1][0];
-        const zDiff = sceneExtents.d[2][1] - sceneExtents.d[2][0];
+        this.root = OctreeNode.create(this.octreeData, this.extentsData);
+        const xDiff = sceneExtents.getPlaneExtent(0, 1) - sceneExtents.getPlaneExtent(0, 0);
+        const yDiff = sceneExtents.getPlaneExtent(1, 1) - sceneExtents.getPlaneExtent(1, 0);
+        const zDiff = sceneExtents.getPlaneExtent(2, 1) - sceneExtents.getPlaneExtent(2, 0);
         const maxDiff = Math.max(xDiff, Math.max(yDiff, zDiff));
         const minPlusMax = [
-            sceneExtents.d[0][0] + sceneExtents.d[0][1],
-            sceneExtents.d[1][0] + sceneExtents.d[1][1],
-            sceneExtents.d[2][0] + sceneExtents.d[2][1],
+            sceneExtents.getPlaneExtent(0, 0) + sceneExtents.getPlaneExtent(0, 1),
+            sceneExtents.getPlaneExtent(1, 0) + sceneExtents.getPlaneExtent(1, 1),
+            sceneExtents.getPlaneExtent(2, 0) + sceneExtents.getPlaneExtent(2, 1),
         ];
         this.bbox.bounds[0][0] = (minPlusMax[0] - maxDiff) * 0.5;
         this.bbox.bounds[0][1] = (minPlusMax[1] - maxDiff) * 0.5;
@@ -110,19 +747,19 @@ class Octree {
         this.bbox.bounds[1][1] = (minPlusMax[1] + maxDiff) * 0.5;
         this.bbox.bounds[1][2] = (minPlusMax[2] + maxDiff) * 0.5;
     }
-    static create(sceneExtents) {
-        return new Octree(sceneExtents);
+    static create(sceneExtents, extentsData, octreeData = []) {
+        return new Octree(sceneExtents, extentsData, octreeData);
     }
     _build(node, bbox) {
         if (node.isLeaf) {
-            node.nodeExtentsList.forEach((e) => {
-                node.nodeExtents.extendBy(e);
+            node.extentsListEach((e) => {
+                node.extents.extendBy(e);
             });
         }
         else {
             for (let i = 0; i < 8; ++i) {
-                const child = node.child[i];
-                if (child) {
+                const childIndex = node.getChildIndex(i);
+                if (childIndex >= 0) {
                     const childBBox = BBox.create();
                     ;
                     const centroid = bbox.centroid();
@@ -136,23 +773,24 @@ class Octree {
                     childBBox.bounds[0][2] = (i & 1) ? centroid[2] : bbox.bounds[0][2];
                     childBBox.bounds[1][2] = (i & 1) ? bbox.bounds[1][2] : centroid[2];
                     // Inspect child
+                    const child = OctreeNode.create(this.octreeData, this.extentsData, childIndex);
                     this._build(child, childBBox);
                     // Expand extents with extents of child
-                    node.nodeExtents.extendBy(child.nodeExtents);
+                    node.extents.extendBy(child.extents);
                 }
             }
         }
     }
     _insert(node, extents, bbox, depth) {
         if (node.isLeaf) {
-            if (node.nodeExtentsList.length === 0 || depth === Octree.MAX_DEPTH) {
-                node.nodeExtentsList.push(extents);
+            if (node.extentsListLength() < Octree.MAX_CONTENTS || depth === Octree.MAX_DEPTH) {
+                node.extentsListPush(extents);
             }
             else {
                 node.isLeaf = false;
                 // Re-insert extents held by this node
-                while (node.nodeExtentsList.length) {
-                    const ne = node.nodeExtentsList.pop();
+                while (node.extentsListLength()) {
+                    const ne = node.extentsListPop();
                     if (!ne) {
                         break;
                     }
@@ -203,23 +841,70 @@ class Octree {
                 childBBox.bounds[0][2] = bbox.bounds[0][2];
                 childBBox.bounds[1][2] = nodeCentroid[2];
             }
-            // Create the child node if it doesn't exsit yet and then insert the extents in it
-            let nc = node.child[childIndex];
-            if (nc === null) {
-                nc = OctreeNode.create();
-                node.child[childIndex] = nc;
+            // Create the child node if it doesn't exist yet and then insert the extents in it
+            let nc = node.getChildIndex(childIndex);
+            let nodeChild;
+            if (nc < 0) {
+                nodeChild = OctreeNode.create(this.octreeData, this.extentsData);
+                node.setChildIndex(nodeChild.index, childIndex);
             }
-            this._insert(nc, extents, childBBox, depth + 1);
+            else {
+                nodeChild = OctreeNode.create(this.octreeData, this.extentsData, nc);
+            }
+            this._insert(nodeChild, extents, childBBox, depth + 1);
         }
     }
     build() {
         this._build(this.root, this.bbox);
     }
+    onEach(cb) {
+        const walk = (root) => {
+            cb(root);
+            root.onEach(walk);
+        };
+        walk(this.root);
+    }
     insert(extents) {
         this._insert(this.root, extents, this.bbox, 0);
     }
+    encode() {
+        const extents = {
+            data: new Uint8Array(this.extentsData),
+            height: 1,
+            length: this.extentsData.length / 2,
+            size: 2,
+            targetUniformSampler: 'extentsData',
+            targetUniformStruct: 'extents',
+            width: this.extentsData.length,
+        };
+        const octree = {
+            data: new Uint8Array(this.extentsData),
+            height: 1,
+            length: this.extentsData.length / 2,
+            size: 2,
+            targetUniformSampler: 'extentsData',
+            targetUniformStruct: 'extents',
+            width: this.extentsData.length,
+        };
+        return {
+            extents,
+            octree,
+        };
+    }
 }
+Octree.MAX_CONTENTS = 16;
 Octree.MAX_DEPTH = 16;
+function getPlaneSetNormals() {
+    return [
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1],
+        [Math.sqrt(3) / 3, Math.sqrt(3) / 3, Math.sqrt(3) / 3],
+        [-Math.sqrt(3) / 3, Math.sqrt(3) / 3, Math.sqrt(3) / 3],
+        [-Math.sqrt(3) / 3, -Math.sqrt(3) / 3, Math.sqrt(3) / 3],
+        [Math.sqrt(3) / 3, -Math.sqrt(3) / 3, Math.sqrt(3) / 3],
+    ];
+}
 const g_cube = (function () {
     const points = [
         // front face
@@ -1738,6 +2423,9 @@ function createObjectPool(create, initialSize = 0) {
         },
     };
 }
+function dot3_1(a, b) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
 function getScene(sphereCount = 57, minOrbit = 3) {
     // Our scene is going to be a proof of concept, can we render a bunch of simple
     // objects at reasonable speed. Mathematical spheres are some of the simplest
@@ -2098,6 +2786,21 @@ function encodeMaterials(scene) {
     };
 }
 //
+// <a name="encodeExtents"></a>
+// ### encodeExtents
+// function encodeExtents(scene: Scene): TextureDataStructureEncoding {
+//   const size = /* numPlaneSetNormals */ 7 * 2;
+//   const sizeRaw = size * 4;
+//   const length = scene.spheres.length;
+//   const width = length * size;
+//   const lengthRaw = width * 4;
+//   const data = new Uint8Array(lengthRaw);
+//   data[12 + pointer] = ambient[0];
+//   data[13 + pointer] = ambient[1];
+//   data[14 + pointer] = ambient[2];
+//   data[15 + pointer] = ambient[3];
+// }
+//
 // <a name="createDataTexture"></a>
 // ### createDataTexture
 //
@@ -2231,6 +2934,8 @@ function getShaderConfiguration(scene) {
         lightCount: scene.lights.length,
         // how many materials are in the scene?
         materialCount: scene.materials.length,
+        // how many octree nodes can we visit?
+        octreeNodeIterationMax: Math.ceil((scene.triangles.length + scene.spheres.length) / 2),
         // we will be packing floats into 8 bit unsigned integer quads (RGBA) and we
         // will want a mechanism for preserving fractions, we can do so by multiplying
         // or dividing by a factor
@@ -2796,7 +3501,7 @@ function getVertexSource() {
 // each pixel
 function getFragmentSource(config) {
     // for brevity's sake break out the config values
-    const { aa, acceleration, bg, defaultF0, epsilon, infinity, lightCount, materialCount, packedFloatMultiplier, phongSpecularExp, shadingModel, sphereCount, triangleCount, } = config;
+    const { aa, acceleration, bg, defaultF0, epsilon, infinity, lightCount, packedFloatMultiplier, phongSpecularExp, shadingModel, sphereCount, triangleCount, } = config;
     let shadingFragment;
     let shadingDeclarations;
     if (shadingModel === 0) {
@@ -2841,8 +3546,14 @@ uniform float width;
         `
 uniform PointLight pointLights[${lightCount}];
 
+uniform sampler2D extentsData ;
+uniform TextureDataStructure extents;
+
 uniform sampler2D materialsData ;
 uniform TextureDataStructure materials;
+
+uniform sampler2D octreeData ;
+uniform TextureDataStructure octree;
 
 uniform sampler2D spheresData;
 uniform TextureDataStructure spheres;
@@ -2865,6 +3576,7 @@ vec3 primaryRay(float xo, float yo);
 Material getMaterial(int index);
 Triangle getTriangle(int index);
 Sphere getSphere(int index);
+float getExtents(int id, int plane, int index);
 ` +
         getShaderUtilityDeclarations() +
         shadingDeclarations +
@@ -3138,16 +3850,37 @@ float sphereIntersection(Sphere sphere, Ray ray) {
 ` +
         // ray "extents" intersection
         `
-// ExtentsIntersect extentsIntersection() {
-//     for (int i = 0; i < ${acceleration.numPlaneSetNormals}; i += 1) {
-//         float tNearExtents = (d[i][0] - precomputedNumerator[i]) / precomputedDenominator[i];
-//     float tFarExtents = (d[i][1] - precomputedNumerator[i]) / precomputedDenominator[i];
-//     if (precomputedDenominator[i] < 0) std::swap(tNearExtents, tFarExtents);
-//     if (tNearExtents > tNear) tNear = tNearExtents, planeIndex = i;
-//     if (tFarExtents < tFar) tFar = tFarExtents;
-//     if (tNear > tFar) return false;
-//     }
-// }
+ExtentsIntersect extentsIntersection(
+    int extentId,
+    float preComputedNumerator[${acceleration.numPlaneSetNormals}],
+    float preComputedDenominator[${acceleration.numPlaneSetNormals}],
+    float tNear,
+    float tFar,
+    int planeIndex
+) {
+    for (int i = 0; i < ${acceleration.numPlaneSetNormals}; i += 1) {
+        float di0 = getExtents(extentId, i, 0);
+        float di1 = getExtents(extentId, i, 1);
+        float tNearExtents = (di0 - preComputedNumerator[i]) / preComputedDenominator[i];
+        float tFarExtents = (di1 - preComputedNumerator[i]) / preComputedDenominator[i];
+        if (preComputedDenominator[i] < 0.0) {
+            float t = tNearExtents;
+            tNearExtents = tFarExtents;
+            tFarExtents = t;
+        }
+        if (tNearExtents > tNear) {
+            tNear = tNearExtents;
+            planeIndex = i;
+        }
+        if (tFarExtents < tFar) {
+            tFar = tFarExtents;
+        }
+        if (tNear > tFar) {
+            return ExtentsIntersect(-1.0, -1.0, -1);
+        }
+    }
+    return ExtentsIntersect(tNear, tFar, planeIndex);
+}
 ` +
         // ray bounding volume hierarchy intersection
         `
@@ -3264,9 +3997,304 @@ Material getMaterial(int index) {
 
     return Material(colourOrAlbedo, ambient, diffuseOrRough, specularOrMetal, refraction, isTranslucent);
 }` +
+        // We'll want a function for getting extents information
+        `
+float getExtents(int id, int plane, int index) {
+    return 0.0;
+}
+` +
         `
 `;
 }
+describe('We can write descriptions in blocks', () => {
+    describe('We can nest descriptions', () => {
+        it('we can specify sets of expectations', () => {
+            expect(true).toBe(true);
+        });
+    });
+    describe('throw handling', () => {
+        it('we can expect things to throw', () => {
+            expect(() => { throw new Error('foo'); }).toThrow();
+        });
+        it('we can expect things *not* to throw', () => {
+            expect(() => { }).not.toThrow();
+        });
+    });
+    describe('we can run things before and after each test', () => {
+        let count = 0;
+        beforeEach(() => {
+            count += 1;
+        });
+        afterEach(() => {
+            count += 1;
+        });
+        it('starts with a before each', () => {
+            expect(count).toBe(1);
+        });
+        it('then runs an after each and another before each', () => {
+            expect(count).toBe(3);
+        });
+    });
+    describe('we can nest before and afters', () => {
+        let count = 0;
+        let nestedCount = 0;
+        beforeEach(() => {
+            count += 1;
+        });
+        afterEach(() => {
+            count += 1;
+        });
+        it('runs outer specs after specs in nested describes', () => {
+            expect(count).toBe(5);
+            expect(nestedCount).toBe(4);
+        });
+        describe('we can nest more before/after eaches', () => {
+            beforeEach(() => {
+                nestedCount += 1;
+            });
+            afterEach(() => {
+                nestedCount += 1;
+            });
+            it('runs both before eaches *before* outer specs', () => {
+                expect(count).toBe(1);
+                expect(nestedCount).toBe(1);
+            });
+            it('runs both after eaches, and both before eaches *before* outer specs', () => {
+                expect(count).toBe(3);
+                expect(nestedCount).toBe(3);
+            });
+        });
+    });
+});
+function getSpaces(number) {
+    return (new Array(number)).fill(' ').join('');
+}
+function initSpec() {
+    const w = window;
+    if (w.SPEC_STATE) {
+        return w.SPEC_STATE;
+    }
+    const SPEC_STATE = specCreateState();
+    w.SPEC_STATE = SPEC_STATE;
+    setTimeout(specRunDescribes, 0);
+    return w.SPEC_STATE;
+}
+function specCreateState() {
+    return {
+        after: [],
+        afterHistory: [],
+        before: [],
+        beforeHistory: [],
+        descriptions: [],
+        error: null,
+        expectations: [],
+        failures: 0,
+        indent: 0,
+        log: '',
+        specifications: [],
+    };
+}
+function specLog(...args) {
+    const state = initSpec();
+    state.log += getSpaces(state.indent) + args.join(' ');
+}
+function describe(description, body) {
+    const state = initSpec();
+    state.descriptions.push({
+        body,
+        description,
+    });
+}
+function it(should, body) {
+    const state = initSpec();
+    state.specifications.push({
+        body,
+        should,
+    });
+}
+function specRunDescribes(isBranch = false) {
+    const state = initSpec();
+    if (state.descriptions.length === 0) {
+        if (isBranch === false) {
+            if (state.failures) {
+                specLog();
+                console.log('Tests:\n' + state.log);
+                console.warn('Testing Complete ' + state.failures + (state.failures > 1 ? ' failures' : ' failure'));
+            }
+            else {
+                console.log('Tests:\n' + state.log);
+                specLog('Testing Complete');
+            }
+        }
+        return;
+    }
+    const suite = state.descriptions.shift();
+    specLog(suite.description + '\n');
+    // increment and swap the various states
+    state.indent += 2;
+    state.afterHistory.push(state.after.length);
+    state.beforeHistory.push(state.before.length);
+    const remainingSuites = state.descriptions;
+    state.descriptions = [];
+    try {
+        suite.body();
+    }
+    catch (e) {
+        state.failures += 1;
+        specLog('❗ Describe Body Error: ' + e.message + '\n');
+    }
+    if (state.descriptions.length) {
+        // branch
+        const spec = state.specifications;
+        state.specifications = [];
+        specRunDescribes(true);
+        state.specifications = spec;
+    }
+    specRunSpecifications();
+    // decrement and restore the various states
+    state.descriptions = remainingSuites;
+    state.indent -= 2;
+    state.after = state.after.slice(0, state.afterHistory[state.afterHistory.length - 1]);
+    state.afterHistory.pop();
+    state.before = state.before.slice(0, state.beforeHistory[state.beforeHistory.length - 1]);
+    state.beforeHistory.pop();
+    // keep iterating
+    specRunDescribes(isBranch);
+}
+function specRunSpecifications() {
+    const state = initSpec();
+    if (state.specifications.length === 0) {
+        specLog('Suite Complete\n');
+        return;
+    }
+    const spec = state.specifications.shift();
+    state.indent += 2;
+    try {
+        state.before.forEach((cb) => cb());
+        spec.body();
+        state.after.forEach((cb) => cb());
+        const result = specRunExpectations();
+        if (result.length >= 2) {
+            specLog(result.slice(0, 2) + ' ' + spec.should + ': ' + result.slice(2) + '\n');
+        }
+        else {
+            specLog(result + ' ' + spec.should + '\n');
+        }
+    }
+    catch (e) {
+        state.failures += 1;
+        specLog('❗ It Body Error: ' + e.message + '\n');
+        state.indent += 2;
+        specLog(e.stack);
+        state.indent -= 2;
+    }
+    state.indent -= 2;
+    specRunSpecifications();
+}
+function specRunExpectations() {
+    const state = initSpec();
+    if (state.expectations.length === 0) {
+        return 'No assertions in this specification';
+    }
+    const final = state.expectations.reduce((s, e) => {
+        if (s.didPass === false) {
+            return s;
+        }
+        if (e.didPass === false) {
+            return e;
+        }
+        return s;
+    }, { didPass: true, reason: '' });
+    state.expectations = [];
+    if (final.didPass) {
+        return '✅';
+    }
+    state.failures += 1;
+    return '❌ ' + final.reason;
+}
+function expect(given) {
+    const state = initSpec();
+    return {
+        not: {
+            toBe(expected) {
+                state.expectations.push({
+                    didPass: expected !== given,
+                    reason: `expected ${given} to strictly *not* equal ${expected}`,
+                });
+            },
+            toThrow() {
+                try {
+                    given();
+                    state.expectations.push({
+                        didPass: true,
+                        reason: '',
+                    });
+                }
+                catch (e) {
+                    state.expectations.push({
+                        didPass: false,
+                        reason: 'given function was expected not to throw, but threw with: ' + e.message || e,
+                    });
+                }
+            },
+        },
+        toBe(expected) {
+            state.expectations.push({
+                didPass: expected === given,
+                reason: `expected ${given} to strictly equal ${expected}`,
+            });
+        },
+        toThrow() {
+            try {
+                given();
+                state.expectations.push({
+                    didPass: false,
+                    reason: 'given function was expected to throw (given function did not throw)',
+                });
+            }
+            catch (e) {
+                state.expectations.push({
+                    didPass: true,
+                    reason: '',
+                });
+            }
+        },
+    };
+}
+function beforeEach(callback) {
+    const state = initSpec();
+    state.before.push(callback);
+}
+function afterEach(callback) {
+    const state = initSpec();
+    state.after.push(callback);
+}
+const MIN_GL_INT = -2147483647;
+const MAX_GL_INT = 2147483647;
+describe('Utility functions', () => {
+    describe('Byte Converstions', () => {
+        it('allows for numbers as low as -2,147,483,647', () => {
+            const bytes = fourByteFromFloat(MIN_GL_INT, []);
+            const float = fourByteToFloat(bytes[0], bytes[1], bytes[2], bytes[3]);
+            expect(float).toBe(MIN_GL_INT);
+        });
+        it('caps low numbers to -2,147,483,647', () => {
+            const bytes = fourByteFromFloat(MIN_GL_INT - 1, []);
+            const float = fourByteToFloat(bytes[0], bytes[1], bytes[2], bytes[3]);
+            expect(float).toBe(MIN_GL_INT);
+        });
+        it('allows for numbers as large as 2,147,483,647', () => {
+            const bytes = fourByteFromFloat(MAX_GL_INT, []);
+            const float = fourByteToFloat(bytes[0], bytes[1], bytes[2], bytes[3]);
+            expect(float).toBe(MAX_GL_INT);
+        });
+        it('caps large to 2,147,483,647', () => {
+            const bytes = fourByteFromFloat(MAX_GL_INT + 1, []);
+            const float = fourByteToFloat(bytes[0], bytes[1], bytes[2], bytes[3]);
+            expect(float).toBe(MAX_GL_INT);
+        });
+    });
+});
 // ## Utility Functions
 // In order to make things more readable and avoid excessive duplication we want to have
 // some functions that contain that repetition.  These are our utility functions
@@ -3459,7 +4487,15 @@ function glslAccessor(type, uniformName, functionName, length, defaultElement = 
 // us to encode JavaScript floats into 4x unsigned byte RGBA values
 //
 // NOTE: This does not preserve fractions!
-function fourByteFromFloat(float, bytes = new Uint8Array(4), unsigned = false) {
+function fourByteFromFloat(float, bytes = [], unsigned = false) {
+    if (unsigned === false) {
+        if (float > 2147483647) {
+            float = 2147483647;
+        }
+        if (float < -2147483647) {
+            float = -2147483647;
+        }
+    }
     const positiveFloat = float < 0 ? float * -1 : float;
     const bit0 = positiveFloat % 256;
     let bit1 = Math.floor(positiveFloat / 256);
@@ -3492,7 +4528,23 @@ function fourByteFromFloat(float, bytes = new Uint8Array(4), unsigned = false) {
     bytes[0] = bit3;
     bytes[1] = bit2;
     bytes[2] = bit1;
-    bytes[3] = bit0;
+    bytes[3] = Math.round(bit0);
     return bytes;
+}
+// back to floats from four bytes
+function fourByteToFloat(byte1, byte2, byte3, byte4, unsigned = false) {
+    if (unsigned) {
+        return byte4 +
+            byte3 * 256 +
+            byte2 * 256 * 256 +
+            byte1 * 256 * 256 * 256;
+    }
+    const sign = byte1 > 127 ? -1 : 1;
+    const bigEndOrZero = byte1 === 255 ? 0 : byte1;
+    const bigEnd = bigEndOrZero > 127 ? bigEndOrZero - 127 : bigEndOrZero;
+    return sign * (byte4 +
+        byte3 * 256 +
+        byte2 * 256 * 256 +
+        bigEnd * 256 * 256 * 256);
 }
 //# sourceMappingURL=index.js.map

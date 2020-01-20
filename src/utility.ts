@@ -227,8 +227,16 @@ function glslAccessor(type: string, uniformName: string, functionName: string, l
 //
 // NOTE: This does not preserve fractions!
 function fourByteFromFloat(
-  float: number, bytes = new Uint8Array(4), unsigned = false
+  float: number, bytes: number[] = [], unsigned = false
 ) {
+  if (unsigned === false) {
+      if (float > 2147483647) {
+          float = 2147483647;
+      }
+      if (float < -2147483647) {
+          float = -2147483647;
+      }
+  }
   const positiveFloat = float < 0 ? float * -1 : float;
   const bit0 = positiveFloat % 256;
   let bit1 = Math.floor(positiveFloat / 256);
@@ -265,7 +273,27 @@ function fourByteFromFloat(
   bytes[0] = bit3;
   bytes[1] = bit2;
   bytes[2] = bit1;
-  bytes[3] = bit0;
+  bytes[3] = Math.round(bit0);
 
   return bytes;
+}
+
+// back to floats from four bytes
+function fourByteToFloat(byte1: number, byte2: number, byte3: number, byte4: number, unsigned = false) {
+  if (unsigned) {
+    return byte4 +
+      byte3 * 256 +
+      byte2 * 256 * 256 +
+      byte1 * 256 * 256 * 256;
+  }
+  const sign = byte1 > 127 ? -1 : 1; 
+  const bigEndOrZero = byte1 === 255 ? 0 : byte1;
+  const bigEnd = bigEndOrZero > 127 ? bigEndOrZero - 127 : bigEndOrZero;
+
+  return sign * (
+    byte4 +
+    byte3 * 256 +
+    byte2 * 256 * 256 +
+    bigEnd * 256 * 256 * 256
+  );
 }
