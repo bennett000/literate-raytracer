@@ -1,4 +1,4 @@
-function getShaderStructs() {
+function getShaderStructs({ priorityQueueMax }: { priorityQueueMax: number }) {
   return `
 ` +
 
@@ -38,6 +38,26 @@ struct Hit {
     Ray ray;
 };
 ` +
+
+// Queue Helpers
+`
+struct PriorityQueueElement {
+    int index;
+    int octree;
+    float distance;
+    int next;
+};
+` +
+
+// Priority Queue 
+
+`
+struct PriorityQueue {
+    PriorityQueueElement head;
+    int length;
+};
+` +
+
 
 // `Sphere`s in our case are mathematical spheres
 // They are a simple point, a radius, and a pointer to an element in the `materials`

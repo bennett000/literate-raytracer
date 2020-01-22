@@ -197,21 +197,21 @@ function tryCatch(thing: Function, happy: (...args: any[]) => void, sad: (error:
 // we don't want to write those by hand if we don't have to though
 //
 // let's automate
-function glslAccessor(type: string, uniformName: string, functionName: string, length: number, defaultElement = 0) {
+function glslAccessor(type: string, functionName: string, length: number, defaultElement = 0) {
     // setup a string with the function declaration
-    let str = `${type} ${functionName}(int index) {
+    let str = `${type} ${functionName}(${type} arr[${length}], int index) {
 `;
 
     // write an if that returns all the known values
     for (let i = 0; i < length; i += 1) {
         str += `  if (index == ${i}) {
-    return ${uniformName}[${i}];
+    return arr[${i}];
   }
 `; 
     }
 
     // return the default in all other cases
-    str += `  return ${uniformName}[${defaultElement}];
+    str += `  return arr[${defaultElement}];
 }
 `;
 

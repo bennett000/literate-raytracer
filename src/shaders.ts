@@ -52,8 +52,8 @@ function getFragmentSource(config: ConfigShader) {
   const { 
     aa, acceleration, bg, defaultF0, epsilon, infinity,
     lightCount, packedFloatMultiplier, 
-    phongSpecularExp, 
-    shadingModel, sphereCount, triangleCount,
+    octreeNodeIterationMax, octreeNodeMaxContents, phongSpecularExp, 
+    priorityQueueMax, shadingModel, sphereCount, triangleCount,
   } = config;
 
   let shadingFragment;
@@ -72,7 +72,7 @@ function getFragmentSource(config: ConfigShader) {
   return `precision mediump float; ` +
 
 // we should load up our structs
-getShaderStructs() +
+getShaderStructs({ priorityQueueMax }) +
 
 // we have a few constants, `bg`, the background colour is configurable
 `
@@ -136,9 +136,21 @@ Material getMaterial(int index);
 Triangle getTriangle(int index);
 Sphere getSphere(int index);
 float getExtents(int id, int plane, int index);
+int getExtentsMeshId(int id);
+int getExtentsMeshType(int id);
+int getOctreeNodeExtentsId(int id);
+Hit bvhIntersection(Ray ray);
+Hit miss(Ray ray);
+bool getOctreeNodeIsLeaf(int index);
+int getOctreeNodeChildIndex(int index, int childIndex);
+void priorityQueuePush(PriorityQueue q, PriorityQueueElement elements[${priorityQueueMax}], int octree, float distance);
+PriorityQueueElement createPriorityQueueElement(int index);
+PriorityQueueElement priorityQueuePop(PriorityQueue q, PriorityQueueElement elements[${priorityQueueMax}]);
+int getOctreeNodeExtentsListId(int index, int element);
 ` +
 getShaderUtilityDeclarations() +
 shadingDeclarations +
+glslAccessor('PriorityQueueElement', 'getPriorityQueueElement', priorityQueueMax) +
 
 // acceleration data structure requirements
 `
@@ -148,10 +160,10 @@ void initPlaneSetNormals() {
     planeSetNormals[0] = vec3(1.0, 0.0, 0.0);
     planeSetNormals[1] = vec3(0.0, 1.0, 0.0); 
     planeSetNormals[2] = vec3(0.0, 0.0, 1.0); 
-    planeSetNormals[3] = vec3( sqrt(3.0) / 3.0,  sqrt(3.0) / 3.0, sqrt(3.0) / 3.0); 
-    planeSetNormals[4] = vec3(-sqrt(3.0) / 3.0,  sqrt(3.0) / 3.0, sqrt(3.0) / 3.0); 
-    planeSetNormals[5] = vec3(-sqrt(3.0) / 3.0, -sqrt(3.0) / 3.0, sqrt(3.0) / 3.0); 
-    planeSetNormals[6] = vec3( sqrt(3.0) / 3.0, -sqrt(3.0) / 3.0, sqrt(3.0) / 3.0);
+    planeSetNormals[3] = vec3( ${Math.sqrt(3.0) / 3.0},  ${Math.sqrt(3.0) / 3.0}, ${Math.sqrt(3.0) / 3.0}); 
+    planeSetNormals[4] = vec3(${-Math.sqrt(3.0) / 3.0},  ${Math.sqrt(3.0) / 3.0}, ${Math.sqrt(3.0) / 3.0}); 
+    planeSetNormals[5] = vec3(${-Math.sqrt(3.0) / 3.0}, ${-Math.sqrt(3.0) / 3.0}, ${Math.sqrt(3.0) / 3.0}); 
+    planeSetNormals[6] = vec3( ${Math.sqrt(3.0) / 3.0}, ${-Math.sqrt(3.0) / 3.0}, ${Math.sqrt(3.0) / 3.0});
 }
 ` + 
 
@@ -188,6 +200,19 @@ vec3 primaryRay(float xo, float yo) {
     return cast1(ray);
 }
 ` +
+
+// miss
+`
+Hit miss(Ray ray) {
+    return Hit(
+        -1.0,
+        Material(vec3(0.0, 0.0, 0.0), 0.0, 0.0, 0.0, 0.0, false),
+        vec3(0.0, 0.0, 0.0),
+        vec3(0.0, 0.0, 0.0),
+        ray
+    );
+}
+`+
 //
 // <a name="trace"></a>
 // #### trace
@@ -199,13 +224,7 @@ Hit trace(Ray ray) {
     SphereDistance sd = intersectSpheres(ray, false);
     TriangleDistance td = intersectTriangles(ray, false);
     if (sd.distance <= 0.0 && td.distance <= 0.0) {
-        return Hit(
-            -1.0,
-            Material(vec3(0.0, 0.0, 0.0), 0.0, 0.0, 0.0, 0.0, false),
-            vec3(0.0, 0.0, 0.0),
-            vec3(0.0, 0.0, 0.0),
-            ray
-        );
+        return miss(ray);
     }
 
     if (sd.distance >= 0.0 && td.distance >= 0.0) {
@@ -456,7 +475,7 @@ ExtentsIntersect extentsIntersection(
 // ray bounding volume hierarchy intersection
 
 `
-bool bvhIntersection(Ray ray) {
+Hit bvhIntersection(Ray ray) {
     float preComputedNumerator[${acceleration.numPlaneSetNormals}];
     float preComputedDenominator[${acceleration.numPlaneSetNormals}];
 
@@ -469,10 +488,97 @@ bool bvhIntersection(Ray ray) {
     float tNear = 0.0; 
     float tFar = ${infinity}; // tNear, tFar for the intersected extents
     
-    // if (!octree->root->nodeExtents.intersect(precomputedNumerator, precomputedDenominator, tNear, tFar, planeIndex) || tFar < 0)
-    // return false;
+    int octreeExtentsId = getOctreeNodeExtentsId(0);
+    ExtentsIntersect ei = extentsIntersection(octreeExtentsId, preComputedNumerator, preComputedDenominator, tNear, tFar, planeIndex);
+    if (ei.tNear < 0.0 && ei.tFar < 0.0 && ei.planeIndex < 0) { return miss(ray);
+    }
 
-    return false;
+    float tHit = tFar;
+
+    // create a priority queue
+    PriorityQueueElement elements[${priorityQueueMax}];
+    for (int i = 0; i < ${priorityQueueMax}; i += 1) {
+        elements[i] = createPriorityQueueElement(i);
+    }
+    PriorityQueue pq = PriorityQueue(
+        elements[0],
+        0
+    );
+
+    // add the root node
+    priorityQueuePush(pq, elements, 0, ${infinity});
+
+    for (int i = 0; i < ${octreeNodeIterationMax}; i += 1) {
+        PriorityQueueElement node = priorityQueuePop(pq, elements);
+        if (node.index == -1) {
+            return miss(ray);
+        }
+
+        if (getOctreeNodeIsLeaf(node.octree)) {
+            for (int j = 0; j < ${octreeNodeMaxContents}; j += 1) {
+                int extentId = getOctreeNodeExtentsListId(node.octree, j);
+                if (extentId == -1) {
+                    break;
+                }
+                // IT'S GO TIME HERE !!!
+                int meshId = getExtentsMeshId(extentId);
+                int meshType = getExtentsMeshType(extentId);
+                if (meshType == 0) {
+                    // sphere
+                    Sphere s = getSphere(meshId);
+                    float dist = sphereIntersection(s, ray);
+                    if (dist >= 0.0) {
+                        // we have a hit
+                        Material m = getMaterial(s.material);
+                        vec3 pointAtTime = ray.point + vec3(ray.vector.xyz * dist);
+                        vec3 normal = sphereNormal(s, pointAtTime);
+                        return Hit(
+                            dist,
+                            m,
+                            normal,
+                            s.point,
+                            ray
+                        );
+                    }
+                } else {
+                    // triangle
+                    Triangle t = getTriangle(meshId);
+                    TriangleDistance td = triangleIntersection(t, ray);
+                    if (td.distance >= 0.0) {
+                        // we have a hit
+                        return Hit(
+                            td.distance,
+                            getMaterial(t.material),
+                            t.normal,
+                            td.intersectPoint,
+                            ray
+                        );
+                    }
+                }
+            }
+        } else {
+            for (int j = 0; j < 8; j += 1) {
+                float tNearChild = 0.0;
+                float tFarChild = tFar;
+                int childId = getOctreeNodeChildIndex(node.octree, j);
+                if (childId >= 0) {
+                    int childExtentsId = getOctreeNodeExtentsId(childId);
+                    if (childExtentsId >= 0) {
+                        ExtentsIntersect intersect = extentsIntersection(childExtentsId, preComputedNumerator, preComputedDenominator, tNearChild, tFarChild, planeIndex);
+                        float t;
+                        if (intersect.tNear < 0.0 && intersect.tFar >= 0.0) {
+                            t = intersect.tFar;
+                        } else {
+                            t = intersect.tNear;
+                        }
+                        priorityQueuePush(pq, elements, childId, t);
+                    }
+                }
+            }
+        }
+    }
+
+    return miss(ray);
 }
 ` +
 
@@ -579,7 +685,171 @@ Material getMaterial(int index) {
 // We'll want a function for getting extents information
 `
 float getExtents(int id, int plane, int index) {
-    return 0.0;
+    int expandedIndex = id * octree.size;
+    float len = float(extents.size * extents.length);
+    return fourByteToFloat(
+        texture2D(extentsData, indexToCoord(expandedIndex + plane * 2 + index, len)), 
+        false
+    );
+}
+` +
+
+// We'll want a function for getting extents mesh information
+`
+int getExtentsMeshId(int id) {
+    int expandedIndex = id * octree.size;
+    float len = float(extents.size * extents.length);
+    return int(fourByteToFloat(
+        texture2D(extentsData, indexToCoord(expandedIndex, len)), 
+        false
+    ));
+}
+` +
+
+// We'll want a function for getting extents mesh type information
+`
+int getExtentsMeshType(int id) {
+    int expandedIndex = id * octree.size;
+    float len = float(extents.size * extents.length);
+    return int(fourByteToFloat(
+        texture2D(extentsData, indexToCoord(expandedIndex + 1, len)), 
+        false
+    ));
+}
+` +
+
+// We'll want a function for getting octreeNodeExtentsId
+`
+int getOctreeNodeExtentsId(int index) {
+    int expandedIndex = index * octree.size;
+    float len = float(octree.size * octree.length);
+    return int(
+        fourByteToFloat(
+            texture2D(octreeData, indexToCoord(expandedIndex + 9, len)), 
+            false
+        )
+    );
+}
+` +
+
+// We'll want to get the start of the node's contents' extents
+`
+int getOctreeNodeExtentsListId(int index, int element) {
+    int expandedIndex = index * octree.size;
+    float len = float(octree.size * octree.length);
+    return int(
+        fourByteToFloat(
+            texture2D(octreeData, indexToCoord(expandedIndex + element + 10, len)), 
+            false
+        )
+    );
+}
+` +
+
+// We'll want a function for getting octreeNodeIsLeaf
+`
+bool getOctreeNodeIsLeaf(int index) {
+    int expandedIndex = index * octree.size;
+    float len = float(octree.size * octree.length);
+    int flag = int(
+        fourByteToFloat(
+            texture2D(octreeData, indexToCoord(expandedIndex, len)), 
+            false
+        )
+    );
+    if (flag == 1) {
+        return true;
+    } else {
+        return false;
+    }
+}
+` +
+
+// We'll want a function for getting octreeNodeChildIndex
+`
+int getOctreeNodeChildIndex(int index, int childIndex) {
+    int expandedIndex = index * octree.size;
+    float len = float(octree.size * octree.length);
+    return int(
+        fourByteToFloat(
+            texture2D(octreeData, indexToCoord(expandedIndex + 1 + childIndex, len)), 
+            false
+        )
+    );
+}
+` +
+
+`
+PriorityQueueElement createPriorityQueueElement(int index) {
+    return PriorityQueueElement(index, -1, 0.0, -1);
+}
+` +
+
+`
+void priorityQueuePush(PriorityQueue q, PriorityQueueElement elements[${priorityQueueMax}], int octree, float distance) {
+    PriorityQueueElement newEl = getPriorityQueueElement(elements, q.length);
+    q.length += 1;
+    newEl.distance = distance;
+    newEl.octree = octree;
+
+    // it's a new Queue
+    if (q.head.index == -1) {
+        newEl.index = 0;
+        q.head = newEl;
+
+        q.length += 1;
+        return;
+    }
+
+    // time for a new head
+    if (distance < q.head.distance) {
+        newEl.next = q.head.index;
+        q.head = newEl;
+
+        q.length += 1;
+        return;
+    }
+
+    // it's the new tail
+    if (q.head.next == -1) {
+        q.head.next = newEl.index;
+
+        q.length += 1;
+        return;
+    }
+
+    // find the place to insert
+    PriorityQueueElement current = q.head;
+    for (int i = 0; i < ${priorityQueueMax}; i += 1) {
+        PriorityQueueElement next = getPriorityQueueElement(elements, current.next);
+        if (distance < next.distance) {
+            newEl.next = next.index;
+            current.next = newEl.index;
+
+            q.length += 1;
+            return;
+        }
+
+        if (next.next == -1) {
+            next.next = newEl.index;
+
+            q.length += 1;
+            return;
+        }
+
+        current = next;
+    }
+}
+` +
+
+`
+PriorityQueueElement priorityQueuePop(PriorityQueue q, PriorityQueueElement elements[${priorityQueueMax}]) {
+    PriorityQueueElement ret = q.head;
+    if (ret.next == -1) {
+        return ret;
+    }
+    q.head = getPriorityQueueElement(elements, ret.next);
+    return ret;
 }
 ` +
 

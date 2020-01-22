@@ -30,7 +30,7 @@ bool areEqualish(float a, float b) {
 `
 vec2 indexToCoord(int index, float len) {
     return vec2(
-        (float(index + 0) + 0.5) / len,
+        (float(index) + 0.5) / len,
         0.0
     );
 }

@@ -37,7 +37,9 @@ function getShaderConfiguration(scene: Scene) {
     // how many materials are in the scene?
     materialCount: scene.materials.length,
     // how many octree nodes can we visit?
-    octreeNodeIterationMax: Math.ceil((scene.triangles.length + scene.spheres.length) / 2),
+    octreeNodeIterationMax: Math.ceil((scene.triangles.length + scene.spheres.length)),
+    // home many children does an Octree have?
+    octreeNodeMaxContents: Octree.MAX_CONTENTS,
     // we will be packing floats into 8 bit unsigned integer quads (RGBA) and we
     // will want a mechanism for preserving fractions, we can do so by multiplying
     // or dividing by a factor
@@ -46,6 +48,8 @@ function getShaderConfiguration(scene: Scene) {
     // that helps us control specular (shiny) lighting
     // it's a string
     phongSpecularExp: '32.0',
+    // max priority queue elements
+    priorityQueueMax: 8 /* octree children */ * Octree.MAX_DEPTH * 2,
     // the shading model we'll be using
     // 1 for Blinn Phong, 0 for PBR
     shadingModel: 0,
